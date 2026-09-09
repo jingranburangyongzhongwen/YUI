@@ -691,6 +691,22 @@ describe("agentTriggerableMotionIds", () => {
   it("returns an empty array for an empty registry", () => {
     expect(agentTriggerableMotionIds({})).toEqual([]);
   });
+
+  it("includes a dropped-in /custom_motions clip so the agent can pick it by file stem", () => {
+    expect(
+      agentTriggerableMotionIds({
+        ...motions(),
+        spin: {
+          vrma_path: "/custom_motions/spin.vrma",
+          kind: "oneshot",
+          loop: false,
+          priority: 70,
+          interrupt_policy: "replace",
+          root_lock_xz: true,
+        },
+      }),
+    ).toEqual(["happy", "spin"]);
+  });
 });
 
 /** The selection is a required argument; most cases exercise it deselecting nothing. */

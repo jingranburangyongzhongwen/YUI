@@ -56,6 +56,8 @@ export interface ResolvedMotion {
   interrupt_policy: InterruptPolicy;
   /** Strip the clip's baked vertical travel — the mover supplies it instead. */
   root_lock_y: boolean;
+  /** Strip the clip's baked horizontal travel — the mover supplies it instead. */
+  root_lock_xz: boolean;
 }
 
 type MotionDecision =
@@ -268,6 +270,7 @@ export function createMotionController(
       priority: entry.priority,
       interrupt_policy: entry.interrupt_policy,
       root_lock_y: !!entry.root_lock_y,
+      root_lock_xz: !!entry.root_lock_xz,
     };
   }
 

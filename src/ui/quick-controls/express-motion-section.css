@@ -108,6 +108,36 @@
   padding: 0 0.15rem 0.1rem;
 }
 
+.yui-express__play {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--yui-text-mute);
+  cursor: pointer;
+}
+
+.yui-express__play svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.yui-express__play:hover,
+.yui-express__play:focus-visible {
+  background: var(--yui-accent-faint);
+  color: var(--yui-accent);
+}
+
+.yui-express__play:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--yui-accent-soft);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .yui-express__head,
   .yui-express__chev {

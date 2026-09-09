@@ -3,6 +3,7 @@ import { type Climber, type ClimbTarget, createClimber } from "./ambient/climber
 import { createFaller, type Faller } from "./ambient/faller";
 import { createJumper } from "./ambient/jumper";
 import { createPercher, type Percher, type PercherWindow } from "./ambient/percher";
+import { createRootMover, type RootMover } from "./ambient/root-mover";
 import type { Sitter } from "./ambient/sitter";
 import type { Tier1Engine } from "./ambient/tier1";
 import { createWalker, type Walker } from "./ambient/walker";
@@ -612,6 +613,54 @@ export function wireWalker(deps: {
     });
     walker.start();
   })().catch((err) => log.warn("walker_start_failed", { degrade: true, error: String(err) }));
+  return handle;
+}
+
+/**
+ * Horizontal root-motion replay. Tauri-only — the floor path moves the OS window, so in a
+ * plain browser (Vite dev) this is skipped and the clip plays in place at the origin.
+ * The returned handle cancels a running follow for the owners that outrank it (user drag)
+ * and owns teardown.
+ */
+export function wireRootMover(deps: {
+  renderer: Renderer;
+  isDragging: () => boolean;
+  isPeeking: () => boolean;
+  setHitTestMoving: (moving: boolean) => void;
+  log: Logger;
+}): { cancel(): void; dispose(): void } {
+  const { renderer, log } = deps;
+  let mover: RootMover | null = null;
+  let disposed = false;
+  const handle = {
+    cancel: () => mover?.cancel(),
+    dispose: () => {
+      disposed = true;
+      mover?.stop();
+    },
+  };
+  if (!isTauri()) return handle;
+  void (async () => {
+    const { availableMonitors, getCurrentWindow } = await import("@tauri-apps/api/window");
+    const { LogicalPosition } = await import("@tauri-apps/api/dpi");
+    if (disposed) return;
+    const moverWindow: PetWindow = {
+      outerPosition: () => getCurrentWindow().outerPosition(),
+      outerSize: () => getCurrentWindow().outerSize(),
+      scaleFactor: () => getCurrentWindow().scaleFactor(),
+      setPositionLogical: (x, y) => getCurrentWindow().setPosition(new LogicalPosition(x, y)),
+    };
+    mover = createRootMover({
+      renderer,
+      getWindow: () => moverWindow,
+      listMonitors: async () => (await availableMonitors()).map(toScreenMonitor),
+      isDragging: deps.isDragging,
+      isPeeking: deps.isPeeking,
+      onStart: () => deps.setHitTestMoving(true),
+      onEnd: () => deps.setHitTestMoving(false),
+    });
+    mover.start();
+  })().catch((err) => log.warn("root_mover_start_failed", { degrade: true, error: String(err) }));
   return handle;
 }
 

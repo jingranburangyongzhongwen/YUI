@@ -71,6 +71,12 @@ describe("clipCacheKey", () => {
     expect(clipCacheKey("calm.vrma", false, true)).toBe("calm.vrma#ylock");
     expect(clipCacheKey("calm.vrma", true, true)).toBe("calm.vrma#mirror#ylock");
   });
+
+  it("appends #xzlock only when the root is locked horizontally", () => {
+    expect(clipCacheKey("motion.vrma", false, false, true)).toBe("motion.vrma#xzlock");
+    expect(clipCacheKey("motion.vrma", true, true, true)).toBe("motion.vrma#mirror#ylock#xzlock");
+    expect(clipCacheKey("calm.vrma", false, true, false)).toBe("calm.vrma#ylock");
+  });
 });
 
 describe("playbackClip", () => {

@@ -176,6 +176,22 @@ describe("resolve() — registry defaults applied", () => {
     expect(r!.vrma_path).toBe("/motions/drag.vrma");
   });
 
+  it("resolve copies root_lock_xz from the registry", () => {
+    const mc = createMotionController({
+      ...syntheticRegistry,
+      stroll: {
+        vrma_path: "/custom_motions/stroll.vrma",
+        kind: "oneshot",
+        loop: false,
+        priority: 70,
+        interrupt_policy: "replace",
+        root_lock_xz: true,
+      },
+    });
+    expect(mc.resolve({ id: "stroll" })!.root_lock_xz).toBe(true);
+    expect(mc.resolve({ id: "idle" })!.root_lock_xz).toBe(false);
+  });
+
   it("signal overrides: loop/speed/fade_ms override registry defaults for drag", () => {
     const mc = createMotionController(realRegistry);
     const r = mc.resolve({ id: "drag", loop: false, speed: 2, fade_ms: 50 });
@@ -989,6 +1005,7 @@ describe("needsRestartOnPoolChange()", () => {
     priority: 0,
     interrupt_policy: "replace",
     root_lock_y: false,
+    root_lock_xz: false,
     ...over,
   });
 
@@ -1049,6 +1066,7 @@ describe("shouldRestartIdle()", () => {
     priority: 0,
     interrupt_policy: "replace",
     root_lock_y: false,
+    root_lock_xz: false,
     ...over,
   });
   const before = ["/motions/calm.vrma"];

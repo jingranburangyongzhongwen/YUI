@@ -13,7 +13,7 @@ import {
   wireSpeakerSelection,
 } from "./bootstrap-wiring";
 import { createConfigStore, TTS_API_KEY_SECRET } from "./config";
-import { agentTriggerableMotionIds } from "./io/broker-client";
+import { agentTriggerableMotionIds, customMotionIds } from "./io/broker-client";
 import { endpointDefaultsFromConfig } from "./io/endpoints-settings";
 import { rateLimitDefaultsFromConfig } from "./io/guardrails-settings";
 import { screenDefaultsFromConfig } from "./io/screen-settings";
@@ -277,6 +277,14 @@ async function bootstrap(): Promise<void> {
         if (!configLoaded) return [];
         try {
           return agentTriggerableMotionIds(config.get().motions);
+        } catch {
+          return [];
+        }
+      },
+      getCustomMotions: () => {
+        if (!configLoaded) return [];
+        try {
+          return customMotionIds(config.get().motions);
         } catch {
           return [];
         }

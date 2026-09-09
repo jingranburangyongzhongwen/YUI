@@ -289,6 +289,22 @@ describe("validateMotions — root_lock_y", () => {
   });
 });
 
+describe("validateMotions — root_lock_xz", () => {
+  it("passes root_lock_xz through", () => {
+    const out = validateMotions(FILE, { idle: baseEntry({ root_lock_xz: true }) });
+    expect(out.idle.root_lock_xz).toBe(true);
+  });
+
+  it("leaves root_lock_xz absent when the entry omits it", () => {
+    const out = validateMotions(FILE, { idle: baseEntry({}) });
+    expect(out.idle.root_lock_xz).toBeUndefined();
+  });
+
+  it("rejects a non-boolean root_lock_xz", () => {
+    expectIssue({ idle: baseEntry({ root_lock_xz: "true" }) }, "root_lock_xz는 boolean이어야 함");
+  });
+});
+
 describe("validateMotions — crossfade_loop", () => {
   it("passes crossfade_loop through when loop:true", () => {
     const entry = baseEntry({ loop: true, crossfade_loop: true });

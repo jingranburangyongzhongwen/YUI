@@ -8,28 +8,37 @@ import type { Logger } from "../../logger";
 import { t } from "../i18n";
 import { HIST_CHEVRON_SVG } from "./constants";
 
-/** Static display grouping. Ids the table does not name fall into the trailing `other` group. */
+/** Static display grouping. Dropped-in clips go to `custom`; leftover catalog ids go to `other`. */
 export const EXPRESS_MOTION_GROUPS: ReadonlyArray<{ id: string; ids: readonly string[] }> = [
   { id: "reaction", ids: ["happy", "laugh", "embarrassed", "sheepish", "calm", "sulk"] },
   { id: "action", ids: ["idle_lively", "sleeping", "dance"] },
 ];
 
+export const CUSTOM_GROUP = "custom";
 const OTHER_GROUP = "other";
+const PLAY_SVG = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>`;
 
 export interface ExpressMotionGroup {
   id: string;
   ids: string[];
 }
 
-/** Vocabulary → display groups, table order first, then whatever the table does not name. */
-export function groupExpressMotions(vocabulary: readonly string[]): ExpressMotionGroup[] {
+/** Vocabulary → display groups: table, then `/custom_motions` clips, then leftover catalog ids. */
+export function groupExpressMotions(
+  vocabulary: readonly string[],
+  customIds: readonly string[] = [],
+): ExpressMotionGroup[] {
+  const customSet = new Set(customIds);
   const groups = EXPRESS_MOTION_GROUPS.map((group) => ({
     id: group.id,
-    ids: group.ids.filter((id) => vocabulary.includes(id)),
+    ids: group.ids.filter((id) => vocabulary.includes(id) && !customSet.has(id)),
   })).filter((group) => group.ids.length > 0);
   const named = new Set(EXPRESS_MOTION_GROUPS.flatMap((group) => group.ids));
-  const rest = vocabulary.filter((id) => !named.has(id));
-  return rest.length > 0 ? [...groups, { id: OTHER_GROUP, ids: rest }] : groups;
+  const custom = vocabulary.filter((id) => customSet.has(id));
+  const rest = vocabulary.filter((id) => !named.has(id) && !customSet.has(id));
+  if (custom.length > 0) groups.push({ id: CUSTOM_GROUP, ids: custom });
+  if (rest.length > 0) groups.push({ id: OTHER_GROUP, ids: rest });
+  return groups;
 }
 
 interface ExpressMotionListDeps {
@@ -38,6 +47,10 @@ interface ExpressMotionListDeps {
   settings: ExpressMotionSettingsStore;
   /** Agent-triggerable motion ids from the loaded catalog; empty until configs load. */
   getVocabulary: () => readonly string[];
+  /** File stems from `/custom_motions`; listed under the Custom group. */
+  getCustomIds?: () => readonly string[];
+  /** Play on the live character. When set, every row gets a ▶. */
+  onPlay?: (id: string) => void;
   log: Logger;
 }
 
@@ -47,7 +60,9 @@ export interface ExpressMotionList {
 }
 
 export function createExpressMotionList(deps: ExpressMotionListDeps): ExpressMotionList {
-  const { settings, getVocabulary, log } = deps;
+  const { settings, getVocabulary, onPlay, log } = deps;
+  const getCustomIds = deps.getCustomIds ?? (() => []);
+  const grouped = (): ExpressMotionGroup[] => groupExpressMotions(getVocabulary(), getCustomIds());
   const sectionEl = deps.root.querySelector<HTMLDivElement>(".yui-express-motion")!;
   const listEl = deps.root.querySelector<HTMLDivElement>(".yui-express")!;
   // Ephemeral: the accordion opens closed on every panel open, and nothing persists it.
@@ -58,8 +73,15 @@ export function createExpressMotionList(deps: ExpressMotionListDeps): ExpressMot
     return groups.map((g) => `${g.id}:${expanded.has(g.id) ? 1 : 0}:${g.ids.join(",")}`).join("|");
   }
 
-  function rowEl(id: string, enabled: boolean): HTMLElement {
-    const label = t(`express_motion.${id}.label`);
+  function labeled(id: string, suffix: "label" | "sub"): string {
+    const key = `express_motion.${id}.${suffix}`;
+    const value = t(key);
+    return value === key ? (suffix === "label" ? id : "") : value;
+  }
+
+  function rowEl(id: string, enabled: boolean, playable: boolean): HTMLElement {
+    const label = labeled(id, "label");
+    const sub = labeled(id, "sub");
     const row = document.createElement("div");
     row.className = "yui-row";
     row.innerHTML = `
@@ -70,9 +92,18 @@ export function createExpressMotionList(deps: ExpressMotionListDeps): ExpressMot
       <button class="yui-switch" type="button" role="switch"></button>
     `;
     row.querySelector<HTMLSpanElement>(".yui-row__label")!.textContent = label;
-    row.querySelector<HTMLSpanElement>(".yui-row__sub")!.textContent = t(
-      `express_motion.${id}.sub`,
-    );
+    const subEl = row.querySelector<HTMLSpanElement>(".yui-row__sub")!;
+    subEl.textContent = sub;
+    subEl.hidden = !sub;
+    if (playable) {
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "yui-express__play";
+      play.dataset.playMotion = id;
+      play.setAttribute("aria-label", t("express_motion.play", { name: label }));
+      play.innerHTML = PLAY_SVG;
+      row.querySelector(".yui-switch")!.before(play);
+    }
     const sw = row.querySelector<HTMLButtonElement>(".yui-switch")!;
     sw.dataset.motion = id;
     sw.setAttribute("aria-label", label);
@@ -123,7 +154,7 @@ export function createExpressMotionList(deps: ExpressMotionListDeps): ExpressMot
       rows.id = rowsId;
       rows.setAttribute("role", "group");
       rows.setAttribute("aria-label", name);
-      for (const id of group.ids) rows.append(rowEl(id, enabled.includes(id)));
+      for (const id of group.ids) rows.append(rowEl(id, enabled.includes(id), Boolean(onPlay)));
       wrap.append(rows);
     }
     return wrap;
@@ -154,7 +185,7 @@ export function createExpressMotionList(deps: ExpressMotionListDeps): ExpressMot
   function render(): void {
     const vocabulary = getVocabulary();
     sectionEl.hidden = vocabulary.length === 0;
-    const groups = groupExpressMotions(vocabulary);
+    const groups = grouped();
     const enabled = enabledExpressMotions(vocabulary, settings.get());
     const next = signature(groups);
     // Toggling only flips switches — rebuilding the rows would drop keyboard focus mid-interaction.
@@ -166,11 +197,18 @@ export function createExpressMotionList(deps: ExpressMotionListDeps): ExpressMot
   }
 
   function groupIds(id: string): string[] {
-    return groupExpressMotions(getVocabulary()).find((g) => g.id === id)?.ids ?? [];
+    return grouped().find((g) => g.id === id)?.ids ?? [];
   }
 
   function handleClick(event: MouseEvent): void {
     const target = event.target as HTMLElement;
+    const playBtn = target.closest<HTMLButtonElement>(".yui-express__play");
+    if (playBtn) {
+      const id = playBtn.dataset.playMotion!;
+      onPlay?.(id);
+      log.info("express_motion_play", { motion: id });
+      return;
+    }
     const master = target.closest<HTMLButtonElement>(".yui-express__master");
     if (master) {
       const id = master.dataset.group!;

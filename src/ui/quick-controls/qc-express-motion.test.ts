@@ -194,4 +194,69 @@ describe("createQuickControls — express motion section", () => {
     expect(groups()).toEqual([]);
     expect(qc.el.querySelector<HTMLElement>(".yui-express-motion")!.hidden).toBe(true);
   });
+
+  it("plays a custom clip on the live character without toggling its vocabulary switch", async () => {
+    const onPlayExpressMotion = vi.fn();
+    qc = createQuickControls({
+      ...defaultQcArgs(mount),
+      expressMotionSettings,
+      getExpressMotions: () => ["happy", "motion"],
+      getCustomMotions: () => ["motion"],
+      onPlayExpressMotion,
+    });
+    qc.open();
+    expect(toggles().map((t) => t.dataset.group)).toEqual(["reaction", "custom"]);
+    expect(
+      Array.from(qc.el.querySelectorAll<HTMLElement>(".yui-express__name")).map(
+        (el) => el.textContent,
+      ),
+    ).toContain("커스텀");
+    toggles()
+      .find((t) => t.dataset.group === "custom")!
+      .click();
+    const play = qc.el.querySelector<HTMLButtonElement>(".yui-express__play")!;
+    expect(play.dataset.playMotion).toBe("motion");
+    expect(qc.el.querySelector('.yui-switch[data-motion="motion"]')).not.toBeNull();
+    play.click();
+    expect(onPlayExpressMotion).toHaveBeenCalledWith("motion");
+    expect(expressMotionSettings.get().disabled).toEqual([]);
+    await Promise.resolve();
+    expect(qc.isOpen()).toBe(false);
+  });
+
+  it("puts a play control on built-in express rows", () => {
+    qc = createQuickControls({
+      ...defaultQcArgs(mount),
+      expressMotionSettings,
+      getExpressMotions: () => ["dance", "motion"],
+      onPlayExpressMotion: vi.fn(),
+    });
+    qc.open();
+    toggles()
+      .find((t) => t.dataset.group === "action")!
+      .click();
+    expect(
+      qc.el.querySelector<HTMLButtonElement>('.yui-express__play[data-play-motion="dance"]'),
+    ).not.toBeNull();
+  });
+
+  it("lists leftover catalog ids under other, and custom clips with a vocabulary switch", () => {
+    qc = createQuickControls({
+      ...defaultQcArgs(mount),
+      expressMotionSettings,
+      getExpressMotions: () => ["wave", "motion"],
+      getCustomMotions: () => ["motion"],
+      onPlayExpressMotion: vi.fn(),
+    });
+    qc.open();
+    expect(toggles().map((t) => t.dataset.group)).toEqual(["custom", "other"]);
+    expect(qc.el.querySelector('.yui-express__master[data-group="other"]')).not.toBeNull();
+    expect(qc.el.querySelector('.yui-express__master[data-group="custom"]')).not.toBeNull();
+    toggles()
+      .find((t) => t.dataset.group === "other")!
+      .click();
+    expect(rowSwitches().map((s) => s.dataset.motion)).toEqual(["wave"]);
+    qc.el.querySelector<HTMLButtonElement>('.yui-express__master[data-group="other"]')!.click();
+    expect(expressMotionSettings.get().disabled).toEqual(["wave"]);
+  });
 });

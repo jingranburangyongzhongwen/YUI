@@ -30,7 +30,7 @@ import {
 } from "./config";
 import { createEventBus } from "./dispatcher/event-bus";
 import { createUserInputSource } from "./dispatcher/user-input-source";
-import { agentTriggerableMotionIds } from "./io/broker-client";
+import { agentTriggerableMotionIds, customMotionIds } from "./io/broker-client";
 import { CAMERA_WHEEL_SENSITIVITY, CAMERA_ZOOM_MAX, CAMERA_ZOOM_MIN } from "./io/camera-settings";
 import { createDevtoolsWindowOpener } from "./io/devtools-window";
 import { endpointDefaultsFromConfig, mergeEndpoints } from "./io/endpoints-settings";
@@ -419,6 +419,14 @@ async function bootstrap(): Promise<BootstrapHandle> {
           return [];
         }
       },
+      getCustomMotions: () => {
+        try {
+          return customMotionIds(config.get().motions);
+        } catch {
+          return [];
+        }
+      },
+      onPlayExpressMotion: (id) => renderer.playMotion({ id }),
       onPopOut: () => openSettings(),
     });
   // DOM surfaces re-mounted on locale change (see i18n subscriber below). Held in

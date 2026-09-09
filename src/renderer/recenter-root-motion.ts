@@ -11,6 +11,12 @@
  * kept beside the clip: the mover replays that curve by moving the window, so the two
  * compose to the authored motion exactly once. Leaving any of it in the track would
  * play it a second time on top.
+ *
+ * Horizontal motion is mean-recentered by default so idle sway stays balanced on origin.
+ * A clip whose locomotion IS the movement, like an imported video dance, has its hips
+ * X/Z pinned to the origin instead: the mover replays that floor path by translating
+ * the OS window. Mean-recentering would leave relative XZ travel in the track and the
+ * pet would walk off the canvas.
  */
 
 import type { AnimationClip } from "three";
@@ -78,22 +84,32 @@ export function detrendRootY(
   return { values: out, travel, shift };
 }
 
-/** A clip's own vertical rise over time: keyframe times, and metres from the first key. */
+/** A clip's own travel over time on one axis: keyframe times, and metres from the first key. */
 export interface RootYCurve {
   times: number[];
   values: number[];
 }
 
-/** The rise a translation track carries, as a curve from its first key. null when it has none. */
-export function rootYCurve(times: ArrayLike<number>, values: ArrayLike<number>): RootYCurve | null {
+/** One translation channel as a curve from its first key. null when it has none. */
+function rootChannelCurve(
+  times: ArrayLike<number>,
+  values: ArrayLike<number>,
+  channel: 0 | 1 | 2,
+): RootYCurve | null {
   const count = times.length;
   if (count < 2 || values.length !== count * 3) return null;
   const out: RootYCurve = { times: [], values: [] };
+  const origin = values[channel];
   for (let i = 0; i < count; i++) {
     out.times.push(times[i]);
-    out.values.push(values[i * 3 + 1] - values[1]);
+    out.values.push(values[i * 3 + channel] - origin);
   }
   return out;
+}
+
+/** The rise a translation track carries, as a curve from its first key. null when it has none. */
+export function rootYCurve(times: ArrayLike<number>, values: ArrayLike<number>): RootYCurve | null {
+  return rootChannelCurve(times, values, 1);
 }
 
 /** The curve's value at a clip time, interpolated between keys and clamped at both ends. */
@@ -139,4 +155,53 @@ export function detrendClipRootY(
     }
   }
   return { travel, shift, curve };
+}
+
+/**
+ * Pin a track's horizontal motion to the origin: every X and Z key onto 0, Y untouched.
+ * The authored X path comes out as a curve so a mover replaying it is the only thing
+ * that translates the body. Depth is pinned, not replayed — desktop pets keep a stable size.
+ */
+export function detrendRootXZ(
+  times: ArrayLike<number>,
+  values: ArrayLike<number>,
+): { values: Float32Array; travelX: number } {
+  const out = new Float32Array(values);
+  const count = times.length;
+  if (count < 1 || values.length !== count * 3) return { values: out, travelX: 0 };
+
+  const span = count > 1 ? times[count - 1] - times[0] : 0;
+  const travelX = span > 0 ? out[(count - 1) * 3] - out[0] : 0;
+
+  for (let i = 0; i < count; i++) {
+    out[i * 3] = 0;
+    out[i * 3 + 2] = 0;
+  }
+  return { values: out, travelX };
+}
+
+/**
+ * Pin every translation track of a clip to the origin in X/Z, and hand back the
+ * lateral X curve so a mover can replay it. The largest |X| travel wins — a VRMA
+ * carries one hips track, so that is the clip's own.
+ */
+export function detrendClipRootXZ(clip: AnimationClip): {
+  travelX: number;
+  curve: RootYCurve | null;
+} {
+  let travelX = 0;
+  let curve: RootYCurve | null = null;
+  for (const track of clip.tracks) {
+    if (!track.name.endsWith(".position")) continue;
+    const own = rootChannelCurve(track.times, track.values, 0);
+    const detrended = detrendRootXZ(track.times, track.values);
+    track.values = detrended.values;
+    if (Math.abs(detrended.travelX) > Math.abs(travelX)) {
+      travelX = detrended.travelX;
+      curve = own;
+    } else if (curve === null) {
+      curve = own;
+    }
+  }
+  return { travelX, curve };
 }

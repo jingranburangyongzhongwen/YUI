@@ -12,7 +12,9 @@
 import { AnimationClip, QuaternionKeyframeTrack, VectorKeyframeTrack } from "three";
 import { describe, expect, it } from "vitest";
 import {
+  detrendClipRootXZ,
   detrendClipRootY,
+  detrendRootXZ,
   detrendRootY,
   type RootYCurve,
   recenterRootTranslation,
@@ -231,5 +233,58 @@ describe("detrendClipRootY", () => {
       new VectorKeyframeTrack("hips.position", [0, 1], [0, 1.0, 0, 0, 1.0, 0]),
     ]);
     expect(detrendClipRootY(clip).travel).toBe(0);
+  });
+});
+
+describe("detrendRootXZ — horizontal travel removal", () => {
+  it("pins every X and Z key to the origin and leaves Y untouched", () => {
+    const { values, travelX } = detrendRootXZ(
+      [0, 1, 2],
+      [0.2, 1.0, 0.4, 0.5, 1.1, 0.9, 1.2, 1.0, 1.4],
+    );
+    expect(travelX).toBeCloseTo(1.0, 6);
+    expect(values[0]).toBeCloseTo(0, 6);
+    expect(values[2]).toBeCloseTo(0, 6);
+    expect(values[3]).toBeCloseTo(0, 6);
+    expect(values[5]).toBeCloseTo(0, 6);
+    expect(values[6]).toBeCloseTo(0, 6);
+    expect(values[8]).toBeCloseTo(0, 6);
+    expect(values[1]).toBeCloseTo(1.0, 6);
+    expect(values[4]).toBeCloseTo(1.1, 6);
+    expect(values[7]).toBeCloseTo(1.0, 6);
+  });
+
+  it("does not mutate the input", () => {
+    const input = [0.2, 1.0, 0.4, 1.2, 1.0, 1.4];
+    const snapshot = [...input];
+    detrendRootXZ([0, 1], input);
+    expect(input).toEqual(snapshot);
+  });
+});
+
+describe("detrendClipRootXZ", () => {
+  it("pins every position track in place and keeps the lateral X path for a mover", () => {
+    const clip = new AnimationClip("motion", 2, [
+      new VectorKeyframeTrack(
+        "hips.position",
+        [0, 1, 2],
+        [0, 1.0, 0, 0.5, 1.1, 0.5, 1.0, 1.0, 1.0],
+      ),
+      new QuaternionKeyframeTrack("hips.quaternion", [0, 2], [0, 0, 0, 1, 0, 0, 0, 1]),
+    ]);
+
+    const { travelX, curve } = detrendClipRootXZ(clip);
+
+    expect(travelX).toBeCloseTo(1.0, 6);
+    expect(curve).toEqual({ times: [0, 1, 2], values: [0, 0.5, 1.0] });
+    expect(sampleRootYCurve(curve as RootYCurve, 0.5)).toBeCloseTo(0.25, 6);
+    const position = clip.tracks[0];
+    expect(position.values[0]).toBeCloseTo(0, 6);
+    expect(position.values[2]).toBeCloseTo(0, 6);
+    expect(position.values[3]).toBeCloseTo(0, 6);
+    expect(position.values[5]).toBeCloseTo(0, 6);
+    expect(position.values[1]).toBeCloseTo(1.0, 6);
+    expect(position.values[4]).toBeCloseTo(1.1, 6);
+    expect(Array.from(clip.tracks[1].values)).toEqual([0, 0, 0, 1, 0, 0, 0, 1]);
   });
 });

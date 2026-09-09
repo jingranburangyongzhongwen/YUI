@@ -6,7 +6,7 @@ import { agentTriggerableMotionIds } from "../../io/broker-client";
 import en from "../i18n/en";
 import ja from "../i18n/ja";
 import ko from "../i18n/ko";
-import { EXPRESS_MOTION_GROUPS, groupExpressMotions } from "./express-motion-section";
+import { CUSTOM_GROUP, EXPRESS_MOTION_GROUPS, groupExpressMotions } from "./express-motion-section";
 
 const registry: MotionRegistry = JSON.parse(
   readFileSync(resolve(process.cwd(), "configs/motions.json"), "utf-8"),
@@ -26,6 +26,18 @@ describe("groupExpressMotions", () => {
       { id: "reaction", ids: ["happy"] },
       { id: "other", ids: ["wave", "shrug"] },
     ]);
+  });
+
+  it("lists dropped-in clips under custom, ahead of leftover catalog ids", () => {
+    expect(groupExpressMotions(["wave", "happy", "spin"], ["spin"])).toEqual([
+      { id: "reaction", ids: ["happy"] },
+      { id: "custom", ids: ["spin"] },
+      { id: "other", ids: ["wave"] },
+    ]);
+  });
+
+  it("omits the custom group when no dropped-in clip is in the vocabulary", () => {
+    expect(groupExpressMotions(["happy"], ["spin"]).map((g) => g.id)).toEqual(["reaction"]);
   });
 
   it("omits a group no id in the vocabulary belongs to", () => {
@@ -60,7 +72,7 @@ describe("express motion labels", () => {
   });
 
   it.each(dicts)("every group, including the fallback, has a name in %s", (_locale, dict) => {
-    const groups = [...EXPRESS_MOTION_GROUPS.map((g) => g.id), "other"];
+    const groups = [...EXPRESS_MOTION_GROUPS.map((g) => g.id), CUSTOM_GROUP, "other"];
     const missing = groups
       .map((id) => `express_motion.group.${id}`)
       .filter((key) => !(key in dict));

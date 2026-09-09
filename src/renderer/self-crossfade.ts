@@ -5,8 +5,13 @@ import type { AnimationClip } from "three";
  * composition. The root lock belongs to the registry entry while the cache is keyed by
  * path, so it has to be in the key: two entries can share one .vrma and disagree on it.
  */
-export function clipCacheKey(vrmaPath: string, mirrored: boolean, rootLockY = false): string {
-  return `${vrmaPath}${mirrored ? "#mirror" : ""}${rootLockY ? "#ylock" : ""}`;
+export function clipCacheKey(
+  vrmaPath: string,
+  mirrored: boolean,
+  rootLockY = false,
+  rootLockXz = false,
+): string {
+  return `${vrmaPath}${mirrored ? "#mirror" : ""}${rootLockY ? "#ylock" : ""}${rootLockXz ? "#xzlock" : ""}`;
 }
 
 /**
@@ -24,8 +29,9 @@ export function playbackClip(
   fadeMs: number,
   cache: Map<string, AnimationClip>,
   rootLockY = false,
+  rootLockXz = false,
 ): AnimationClip {
-  const cacheKey = clipCacheKey(vrmaPath, mirrored, rootLockY);
+  const cacheKey = clipCacheKey(vrmaPath, mirrored, rootLockY, rootLockXz);
   const clip = cache.get(cacheKey)!;
   if (fadeMs <= 0 || !prevClip || prevClip.uuid !== clip.uuid) return clip;
 

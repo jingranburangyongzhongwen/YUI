@@ -1,29 +1,12 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
-import os from "node:os";
 import { buildDevUrl, findFreePort, resolvePort } from "./dev-port.mjs";
+import { spawnLocalCli, wireDetachedChild } from "./spawn-local.mjs";
 
 const port = await resolvePort({ env: process.env, isPortFree: findFreePort });
 console.log(`[YUI] vite dev → ${buildDevUrl(port)} (browser only, YUI_DEV_PORT=${port})`);
-const child = spawn("pnpm", ["exec", "vite"], {
+const child = spawnLocalCli("vite", "bin/vite.js", [], {
   stdio: "inherit",
   detached: true,
   env: { ...process.env, YUI_DEV_PORT: String(port) },
 });
-// detached → signal the whole process group so grandchild vite is reaped too, not just pnpm.
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"])
-  process.on(sig, () => {
-    try {
-      process.kill(-child.pid, sig);
-    } catch {
-      child.kill(sig);
-    }
-  });
-child.on("error", (err) => {
-  console.error(`[YUI] failed to start vite dev: ${err.message}`);
-  process.exit(1);
-});
-// signal death exits 128+signum (130 for SIGINT), preserving the failure-vs-Ctrl-C distinction.
-child.on("exit", (code, signal) =>
-  process.exit(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 1) : 0)),
-);
+wireDetachedChild(child, "[YUI] failed to start vite dev");

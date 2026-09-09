@@ -93,6 +93,16 @@ export function validateMotions(file: string, raw: unknown): MotionRegistry {
         root_lock_y = rawRootLockY;
       }
     }
+    // root_lock_xz: strip the clip's baked horizontal travel; the mover supplies it instead.
+    const rawRootLockXz = entry.root_lock_xz;
+    let root_lock_xz: boolean | undefined;
+    if (rawRootLockXz !== undefined) {
+      if (typeof rawRootLockXz !== "boolean") {
+        issues.push(`${id}.root_lock_xz는 boolean이어야 함`);
+      } else {
+        root_lock_xz = rawRootLockXz;
+      }
+    }
     // cycle_dwell_ms: ms to hold the settled frame before a cycle motion swaps to the next variant.
     const rawCycleDwell = entry.cycle_dwell_ms;
     let cycle_dwell_ms: number | undefined;
@@ -186,6 +196,7 @@ export function validateMotions(file: string, raw: unknown): MotionRegistry {
       ...(fade_ms !== undefined ? { fade_ms } : {}),
       ...(broker_publish !== undefined ? { broker_publish } : {}),
       ...(root_lock_y !== undefined ? { root_lock_y } : {}),
+      ...(root_lock_xz !== undefined ? { root_lock_xz } : {}),
       kind: entry.kind as MotionKind,
       loop: entry.loop as boolean,
       priority: entry.priority as number,

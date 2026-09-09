@@ -49,5 +49,10 @@ src/ui/mocks/
 # Local reference clips are not repo content — never track them.
 resources/references/
 
+# Drop-in VRMA clips (Character tab Custom). Scan at load; not repo content.
+public/custom_motions/*
+!public/custom_motions/.gitkeep
+!public/custom_motions/AGENTS.md
+
 # Witness activity log (machine-local observation records)
 witness/

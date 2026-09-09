@@ -1,7 +1,8 @@
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { extname, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
+import { mergeCustomMotions, readLocalMotionsOverlay } from "./scripts/custom-motions.mjs";
 import { resolveVitePort } from "./scripts/dev-port.mjs";
 
 // Dev static serving: /vrms/* → resources/vrms/, /configs/* → configs/.
@@ -19,6 +20,31 @@ const MIME: Record<string, string> = {
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
 };
+
+/** Dev-only: fold `public/custom_motions/*.vrma` into `/configs/motions.json`. */
+function serveCustomMotions(): Plugin {
+  return {
+    name: "yui-custom-motions",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = (req.originalUrl ?? req.url ?? "").split("?")[0];
+        if (url !== "/configs/motions.json") return next();
+        try {
+          const base = JSON.parse(
+            readFileSync(resolve(process.cwd(), "configs/motions.json"), "utf8"),
+          );
+          const merged = mergeCustomMotions(base, readLocalMotionsOverlay());
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(merged));
+        } catch (err) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end(err instanceof Error ? err.message : String(err));
+        }
+      });
+    },
+  };
+}
 
 function serveDir(prefix: string, dir: string): Plugin {
   const root = resolve(process.cwd(), dir);
@@ -71,6 +97,7 @@ export default defineConfig(() => ({
     },
   },
   plugins: [
+    serveCustomMotions(),
     serveDir("/vrms", "resources/vrms"),
     serveDir("/configs", "configs"),
     serveDir("/vad", "public/vad"),

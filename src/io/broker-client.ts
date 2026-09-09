@@ -345,6 +345,15 @@ export function agentTriggerableMotionIds(motions: MotionRegistry): string[] {
     .map(([id]) => id);
 }
 
+/** Dropped-in clips live under `/custom_motions/`; the file stem is the motion id. */
+export const CUSTOM_MOTIONS_PREFIX = "/custom_motions/";
+
+export function customMotionIds(motions: MotionRegistry): string[] {
+  return Object.entries(motions)
+    .filter(([, entry]) => entry.vrma_path.startsWith(CUSTOM_MOTIONS_PREFIX))
+    .map(([id]) => id);
+}
+
 /**
  * Pure derivation of the broker payload from loaded config. emotion ids = registry keys; motion ids
  * = agent-triggerable motion keys (see agentTriggerableMotionIds) narrowed by the user's

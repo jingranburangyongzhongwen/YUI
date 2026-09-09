@@ -88,6 +88,13 @@ export interface MotionRegistryEntry {
    * replays that curve by moving the window, so anything left in the track plays twice.
    */
   root_lock_y?: boolean;
+  /**
+   * Pin the clip's hips X/Z to the origin, keeping the floor path that came out. For a
+   * clip whose locomotion IS the movement (an imported video dance): the mover replays
+   * that path by translating the OS window, so anything left in the track walks off the
+   * canvas and then plays again on the window.
+   */
+  root_lock_xz?: boolean;
   kind: MotionKind;
   loop: boolean;
   /** 0~100, higher is higher priority. */

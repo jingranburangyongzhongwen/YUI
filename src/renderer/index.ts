@@ -66,6 +66,7 @@ import { createPinController, type PinController } from "./pin-controller";
 import { clampPixelRatio } from "./pixel-ratio";
 import { projectBoxWidthPx, projectFeetAnchor, type ScreenAnchor } from "./project-anchor";
 import {
+  detrendClipRootXZ,
   detrendClipRootY,
   type RootYCurve,
   recenterClipRootMotion,
@@ -312,6 +313,12 @@ export interface Renderer {
    * line. Signed metres from the clip's first key. null until the clip is cached.
    */
   getMotionTravelAt(id: string, timeS: number): number | null;
+  /**
+   * Lateral X travel at one point in a `root_lock_xz` clip, interpolated between
+   * keyframes. Signed metres from the clip's first key. null until the clip is
+   * cached, or when the entry is not xz-locked.
+   */
+  getMotionTravelXAt(id: string, timeS: number): number | null;
   /** Clip-local playhead (s) of the committed motion. null when nothing is playing. */
   getCurrentMotionTime(): number | null;
   /**
@@ -484,6 +491,8 @@ export function createRenderer(options: RendererOptions): Renderer {
   const clipTravelY = new Map<string, number>();
   /** The rise each root-locked clip carries, as a curve a mover can follow. */
   const clipRootCurve = new Map<string, RootYCurve>();
+  /** The lateral X path each xz-locked clip carries, as a curve a mover can follow. */
+  const clipRootCurveX = new Map<string, RootYCurve>();
   /** Hips world y in the loaded VRM's rest pose — where a root-locked clip is anchored. */
   let restHipsY: number | undefined;
   const deadClips = createDeadClipRegistry(log);
@@ -719,6 +728,7 @@ export function createRenderer(options: RendererOptions): Renderer {
     clipCache.clear();
     clipTravelY.clear();
     clipRootCurve.clear();
+    clipRootCurveX.clear();
     restHipsY = undefined;
     motionMirror = false;
     boneNameSwap.clear();
@@ -747,7 +757,7 @@ export function createRenderer(options: RendererOptions): Renderer {
   function registryClipKey(id: string): string | null {
     const entry = motionRegistry?.[id];
     if (!entry) return null;
-    return clipCacheKey(entry.vrma_path, motionMirror, !!entry.root_lock_y);
+    return clipCacheKey(entry.vrma_path, motionMirror, !!entry.root_lock_y, !!entry.root_lock_xz);
   }
 
   /**
@@ -759,22 +769,30 @@ export function createRenderer(options: RendererOptions): Renderer {
     vrmaPath: string,
     mirrored: boolean,
     rootLockY = false,
+    rootLockXz = false,
   ): Promise<THREE.AnimationClip | null> {
-    const cacheKey = clipCacheKey(vrmaPath, mirrored, rootLockY);
+    const cacheKey = clipCacheKey(vrmaPath, mirrored, rootLockY, rootLockXz);
     const cached = clipCache.get(cacheKey);
     if (cached) return cached;
     if (!currentVrm) return null;
 
     if (mirrored) {
-      const upright = await loadClip(vrmaPath, false, rootLockY);
+      const upright = await loadClip(vrmaPath, false, rootLockY, rootLockXz);
       if (!upright) return null;
       const clip = mirrorClipTracks(upright, boneNameSwap);
       clipCache.set(cacheKey, clip);
       // Mirroring swaps left/right bones; the vertical travel and its curve are the upright clip's.
-      const uprightKey = clipCacheKey(vrmaPath, false, rootLockY);
+      const uprightKey = clipCacheKey(vrmaPath, false, rootLockY, rootLockXz);
       clipTravelY.set(cacheKey, clipTravelY.get(uprightKey) ?? 0);
       const curve = clipRootCurve.get(uprightKey);
       if (curve) clipRootCurve.set(cacheKey, curve);
+      // A mirrored body walks the other way: negate the floor-path X the mover will replay.
+      const xCurve = clipRootCurveX.get(uprightKey);
+      if (xCurve)
+        clipRootCurveX.set(cacheKey, {
+          times: xCurve.times,
+          values: xCurve.values.map((v) => -v),
+        });
       return clip;
     }
 
@@ -799,7 +817,20 @@ export function createRenderer(options: RendererOptions): Renderer {
       return null;
     }
     const clip = createVRMAnimationClip(vrmAnimation as never, currentVrm);
-    recenterClipRootMotion(clip); // strip baked horizontal root drift so the pet stays centered.
+    // A clip whose locomotion IS the movement plays in place; the mover supplies the
+    // floor path. Mean-recentering would leave relative XZ travel in the track and the
+    // pet would walk off the canvas, so xz-lock replaces it rather than composing.
+    if (rootLockXz) {
+      const locked = detrendClipRootXZ(clip);
+      if (locked.curve) clipRootCurveX.set(cacheKey, locked.curve);
+      log.debug("clip.root_locked_xz", {
+        vrma_path: vrmaPath,
+        travelX: locked.travelX,
+        keys: locked.curve?.times.length ?? 0,
+      });
+    } else {
+      recenterClipRootMotion(clip); // strip baked horizontal root drift so the pet stays centered.
+    }
     // A clip whose rise IS the movement plays in place; the mover supplies the travel,
     // following the curve the clip had rather than a straight line through it.
     if (rootLockY) {
@@ -831,7 +862,12 @@ export function createRenderer(options: RendererOptions): Renderer {
     if (!currentVrm || !mixer) return;
     const epoch = vrmEpoch;
     try {
-      let clip = await loadClip(motion.vrma_path, mirrored, motion.root_lock_y);
+      let clip = await loadClip(
+        motion.vrma_path,
+        mirrored,
+        motion.root_lock_y,
+        motion.root_lock_xz,
+      );
       if (!motionStartGeneration.isCurrent(startToken)) return;
       if (!clip) {
         // Real load failure (clip missing/invalid for the live VRM) → fall back to idle.
@@ -852,6 +888,7 @@ export function createRenderer(options: RendererOptions): Renderer {
         fadeMs,
         clipCache,
         motion.root_lock_y,
+        motion.root_lock_xz,
       );
 
       const action = mixer.clipAction(clip);
@@ -1283,6 +1320,12 @@ export function createRenderer(options: RendererOptions): Renderer {
       const curve = clipRootCurve.get(key);
       return curve ? sampleRootYCurve(curve, timeS) : 0;
     },
+    getMotionTravelXAt(id, timeS) {
+      const key = registryClipKey(id);
+      if (!key || !clipCache.has(key)) return null;
+      const curve = clipRootCurveX.get(key);
+      return curve ? sampleRootYCurve(curve, timeS) : null;
+    },
     getCurrentMotionTime() {
       const current = controller?.current();
       if (!current || !currentAction) return null;
@@ -1297,7 +1340,7 @@ export function createRenderer(options: RendererOptions): Renderer {
     async preloadMotion(id) {
       const entry = motionRegistry?.[id];
       if (!entry) return;
-      await loadClip(entry.vrma_path, motionMirror, !!entry.root_lock_y);
+      await loadClip(entry.vrma_path, motionMirror, !!entry.root_lock_y, !!entry.root_lock_xz);
     },
     setIdleThrottleEnabled(enabled) {
       idleThrottleEnabled = enabled;

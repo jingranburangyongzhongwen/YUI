@@ -193,6 +193,10 @@ interface QuickControlsOptions {
   expressMotionSettings?: ExpressMotionSettingsStore;
   /** Agent-triggerable motion ids backing that section (empty until configs load). */
   getExpressMotions?: () => readonly string[];
+  /** Dropped-in `/custom_motions` ids; listed under Custom in the Character tab. */
+  getCustomMotions?: () => readonly string[];
+  /** Play an express motion on the live character (Character tab ▶). */
+  onPlayExpressMotion?: (id: string) => void;
 }
 
 interface QuickControls {
@@ -457,6 +461,8 @@ export function createQuickControls({
   getIdlePool,
   expressMotionSettings,
   getExpressMotions,
+  getCustomMotions,
+  onPlayExpressMotion,
 }: QuickControlsOptions): QuickControls {
   const isWindow = variant === "window";
   // Context-occupancy readout renders only in the settings window, when both stores are injected.
@@ -674,6 +680,13 @@ export function createQuickControls({
         root: el,
         settings: expressMotionSettings,
         getVocabulary: () => getExpressMotions?.() ?? [],
+        getCustomIds: () => getCustomMotions?.() ?? [],
+        onPlay: onPlayExpressMotion
+          ? (id) => {
+              onPlayExpressMotion(id);
+              if (!isWindow) queueMicrotask(() => popover.close());
+            }
+          : undefined,
         log,
       })
     : undefined;

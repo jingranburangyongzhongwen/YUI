@@ -294,6 +294,17 @@ describe("configs/motions.json", () => {
     }
   });
 
+  it("keeps root_lock_xz and /custom_motions clips out of the shipped catalog", () => {
+    const locked = Object.entries(m)
+      .filter(([, e]: [string, any]) => e.root_lock_xz === true)
+      .map(([id]) => id);
+    expect(locked).toEqual([]);
+    expect(
+      Object.values(m).some((e: any) => String(e.vrma_path).startsWith("/custom_motions/")),
+    ).toBe(false);
+    expect(m.motion).toBeUndefined();
+  });
+
   it("window_sit is a looping state perch that cycles variants seamlessly (no dwell, long fade)", () => {
     expect(m.window_sit).toBeDefined();
     expect(m.window_sit.kind).toBe("state");

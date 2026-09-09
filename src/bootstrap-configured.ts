@@ -8,6 +8,7 @@ import {
   wireGuardrailsOverrides,
   wirePeekExitTriggers,
   wirePercher,
+  wireRootMover,
   type wireSpeakerSelection,
   wireStopControl,
   wireStrollReflexCancel,
@@ -522,6 +523,15 @@ const realFactories: ConfiguredBootstrapFactories = {
     register(walker.dispose);
     register(wireStrollReflexCancel({ dispatcher, walker }));
 
+    const rootMover = wireRootMover({
+      renderer,
+      isDragging: () => dragging,
+      isPeeking: () => peekStateRef?.active() ?? false,
+      setHitTestMoving: (moving) => hitTest.setMoving(moving),
+      log,
+    });
+    register(rootMover.dispose);
+
     // Set once each loop exists — the drop source and the faller are built before them.
     let percherRef: { cancel(): void; landOn(target: WindowRect): void } | null = null;
 
@@ -567,6 +577,9 @@ const realFactories: ConfiguredBootstrapFactories = {
       noteAvatarMoved: () => dispatcher.noteAvatarMoved(),
       noteAgentMove: () => {
         walker.cancel();
+        // Same as a user drag: drop the old floor-path origin so a still-playing
+        // xz-locked clip restarts the follow from wherever the agent just put her.
+        rootMover.cancel();
         faller.cancel();
         climberRef?.cancel();
         percherRef?.cancel();
@@ -640,6 +653,7 @@ const realFactories: ConfiguredBootstrapFactories = {
       onDragStart: () => {
         dragging = true;
         walker.cancel();
+        rootMover.cancel();
         faller.cancel();
         climber.cancel();
         percher.cancel();
