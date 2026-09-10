@@ -54,5 +54,13 @@ public/custom_motions/*
 !public/custom_motions/.gitkeep
 !public/custom_motions/AGENTS.md
 
+# Local WHAM / video conversion dumps
+pkl2vrma/**/*.pkl
+pkl2vrma/**/*.bvh
+pkl2vrma/**/*.vrma
+pkl2vrma/**/*.meta.json
+pkl2vrma/**/__pycache__/
+
 # Witness activity log (machine-local observation records)
 witness/
+.history
