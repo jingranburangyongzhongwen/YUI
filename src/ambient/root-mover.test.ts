@@ -62,6 +62,7 @@ function makeHarness(
     timeS?: number | null;
     curve?: number | null;
     monitors?: ScreenMonitor[];
+    held?: boolean;
   } = {},
 ) {
   let tick: TickFn | null = null;
@@ -74,6 +75,7 @@ function makeHarness(
   let dragging = over.dragging ?? false;
   let peeking = over.peeking ?? false;
   let perched = over.perched ?? false;
+  let held = over.held ?? false;
   let position = { ...(over.position ?? WINDOW_POS) };
 
   const deps: RootMoverDeps = {
@@ -105,6 +107,7 @@ function makeHarness(
     listMonitors: async () => over.monitors ?? [MONITOR],
     isDragging: () => dragging,
     isPeeking: () => peeking,
+    isHeld: () => held,
     onStart: starts,
     onEnd: ends,
   };
@@ -140,6 +143,9 @@ function makeHarness(
     },
     setPerched: (v: boolean) => {
       perched = v;
+    },
+    setHeld: (v: boolean) => {
+      held = v;
     },
     setWindowPos: (next: { x: number; y: number }) => {
       position = { ...next };
@@ -272,5 +278,30 @@ describe("createRootMover", () => {
     await h.frame();
     expect(h.starts).not.toHaveBeenCalled();
     expect(h.positions).toEqual([]);
+  });
+
+  it("does not start following while a directed walk or travel holds the window", async () => {
+    const h = makeHarness({ held: true });
+    h.mover.start();
+    await h.frame();
+    await h.frame();
+    expect(h.starts).not.toHaveBeenCalled();
+    expect(h.positions).toEqual([]);
+  });
+
+  it("stops without moving when a directed walk takes the window", async () => {
+    const h = makeHarness();
+    h.mover.start();
+    await h.frame();
+    await h.frame();
+    expect(h.starts).toHaveBeenCalledTimes(1);
+    const last = h.positions.length;
+    h.setHeld(true);
+    await h.frame();
+    expect(h.ends).toHaveBeenCalledTimes(1);
+    h.setTime(1);
+    h.setCurve(1);
+    await h.frame();
+    expect(h.positions.length).toBe(last);
   });
 });

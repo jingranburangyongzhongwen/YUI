@@ -9,8 +9,10 @@
  * where the clip's lateral travel ended.
  *
  * Presentation only: the mover never requests a clip. It follows whatever xz-locked
- * motion the renderer is already playing, yields to a drag/perch/peek, and no-ops
- * when the clip is not yet cached.
+ * motion the renderer is already playing, yields the window to a drag/perch/peek, a
+ * directed walkTo, or a travel frame, and no-ops when the clip is not yet cached. A
+ * published oneshot leaves the perch before it plays, so the follow can start once she
+ * is standing; she sits back when the clip ends. A peek oneshot still plays in place.
  */
 
 import {
@@ -60,6 +62,8 @@ export interface RootMoverDeps {
   listMonitors(): Promise<ScreenMonitor[]>;
   isDragging(): boolean;
   isPeeking(): boolean;
+  /** A directed walkTo or a travel frame already owns window translation. */
+  isHeld(): boolean;
   /** The window is translating — keep the hit-test cursor mapping accurate. */
   onStart(): void;
   /** Follow ended; the window stays where the clip left it. */
@@ -94,6 +98,10 @@ export function createRootMover(deps: RootMoverDeps): RootMover {
   let stopped = true;
   let startedFollow = false;
 
+  function held(): boolean {
+    return deps.isDragging() || deps.isPeeking() || renderer.isPerched() || deps.isHeld();
+  }
+
   function release(): void {
     generation += 1;
     if (!follow && !startedFollow) return;
@@ -115,7 +123,7 @@ export function createRootMover(deps: RootMoverDeps): RootMover {
     ]);
     if (stopped || generation !== startedAt) return;
     if (renderer.getCurrentMotion()?.id !== id) return;
-    if (deps.isDragging() || deps.isPeeking() || renderer.isPerched()) return;
+    if (held()) return;
 
     const t = renderer.getCurrentMotionTime();
     const travel0 = renderer.getMotionTravelXAt(id, t ?? 0);
@@ -149,7 +157,7 @@ export function createRootMover(deps: RootMoverDeps): RootMover {
       if (follow || startedFollow) release();
       return;
     }
-    if (deps.isDragging() || deps.isPeeking() || renderer.isPerched()) {
+    if (held()) {
       if (follow || startedFollow) release();
       return;
     }
@@ -173,12 +181,7 @@ export function createRootMover(deps: RootMoverDeps): RootMover {
     if (sample === null) return;
 
     const dx = windowDeltaFromHipsX(sample - follow.travel0X, follow.pxPerMetre);
-    const next = clampRootFollow(
-      follow.originX + dx,
-      follow.originY,
-      follow.width,
-      follow.work,
-    );
+    const next = clampRootFollow(follow.originX + dx, follow.originY, follow.width, follow.work);
     void follow.win
       .setPositionLogical(Math.round(next.x), Math.round(next.y))
       .catch((err) => log.warn("move_failed", { degrade: true, error: String(err) }));

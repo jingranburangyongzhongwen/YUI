@@ -222,6 +222,8 @@ export interface Walker {
   cancel(): void;
   /** An ambient stroll is moving the window — a directed walk belongs to its caller. */
   isStrolling(): boolean;
+  /** A walkTo is in flight, including while an express clip has the body. */
+  isWalkingTo(): boolean;
   stop(): void;
 }
 
@@ -541,6 +543,9 @@ export function createWalker(deps: WalkerDeps): Walker {
     },
     isStrolling() {
       return stroll !== null && !stroll.directed;
+    },
+    isWalkingTo() {
+      return stroll?.directed === true;
     },
     stop() {
       stopped = true;

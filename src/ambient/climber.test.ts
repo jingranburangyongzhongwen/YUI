@@ -1445,6 +1445,14 @@ describe("createClimber — down", () => {
     expect(h.walkTargets).toEqual([]);
   });
 
+  it("does not descend while a turn holds the body", async () => {
+    const h = perchedHarness({ busy: true });
+    h.climber.start();
+    await h.skipDwell();
+    expect(h.release).not.toHaveBeenCalled();
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
   it("holds the perch until the dwell elapses", async () => {
     const h = perchedHarness();
     h.climber.start();

@@ -819,11 +819,14 @@ describe("createWalker", () => {
     expect(h.walker.isStrolling()).toBe(false);
     await h.skipInterval();
     expect(h.walker.isStrolling()).toBe(true);
+    expect(h.walker.isWalkingTo()).toBe(false);
     h.walker.cancel();
     expect(h.walker.isStrolling()).toBe(false);
+    expect(h.walker.isWalkingTo()).toBe(false);
     void h.walker.walkTo(700);
     await h.frame();
     expect(h.walker.isStrolling()).toBe(false);
+    expect(h.walker.isWalkingTo()).toBe(true);
   });
 
   it("skips when the framing cannot be measured", async () => {
@@ -1072,6 +1075,7 @@ describe("createWalker — walkTo", () => {
     h.setCurrentMotion({ id: "happy", vrma_path: "/motions/happy.vrma" });
     await h.frame();
     await h.frame();
+    expect(h.walker.isWalkingTo()).toBe(true);
     expect(h.positions.at(-1)).toEqual(held);
 
     kind = "ambient";

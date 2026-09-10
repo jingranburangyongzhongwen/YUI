@@ -61,7 +61,7 @@ import {
   seatAnchorWorld,
   worldYPerPixel,
 } from "./perch-geometry";
-import { baselineWhileHeld, suppressWhileHeld } from "./perch-hold";
+import { baselineWhileHeld, shouldLeaveSeatForMotion, suppressWhileHeld } from "./perch-hold";
 import { createPinController, type PinController } from "./pin-controller";
 import { clampPixelRatio } from "./pixel-ratio";
 import { projectBoxWidthPx, projectFeetAnchor, type ScreenAnchor } from "./project-anchor";
@@ -186,6 +186,11 @@ export interface Renderer {
   stopMouth(): void;
   /** Lookup motion registry and play VRMA. Registry must be injected to operate. */
   playMotion(motion: RenderMotionSignal | null): void;
+  /**
+   * A published oneshot while perched stands up, plays, then sits back. The handler
+   * returns true when it owns the cue; false plays in place. null restores in-place playback.
+   */
+  setLeaveSeatForOneshot(handler: ((motion: RenderMotionSignal) => boolean) | null): void;
   /** Currently committed motion (variant-resolved) — null before any playback. */
   getCurrentMotion(): { id: string; vrma_path: string } | null;
   /**
@@ -499,6 +504,8 @@ export function createRenderer(options: RendererOptions): Renderer {
   /** Currently playing AnimationAction (prev in crossfade). */
   let currentAction: THREE.AnimationAction | undefined;
   let lastStateMotionId: string | null = null;
+  /** A published oneshot while perched — stand up, play, sit back. */
+  let leaveSeatForOneshot: ((motion: RenderMotionSignal) => boolean) | null = null;
   /** mixer "finished" event → AnimationAction → motion id reverse lookup. */
   const actionToId = new Map<THREE.AnimationAction, string>();
   /** Hotswap race guard: if VRM changes during load async, discard. */
@@ -1044,6 +1051,19 @@ export function createRenderer(options: RendererOptions): Renderer {
     if (!currentVrm || !mixer) return; // Playback not possible if VRM not loaded.
     const perched = pins.isPerched();
     const peeking = pins.isPeeking();
+    if (
+      leaveSeatForOneshot &&
+      motion &&
+      shouldLeaveSeatForMotion(
+        motion,
+        perched,
+        (id) => motionRegistry?.[id]?.kind,
+        (id) => motionRegistry?.[id]?.broker_publish !== false,
+      ) &&
+      leaveSeatForOneshot(motion)
+    ) {
+      return;
+    }
     if (suppressWhileHeld(motion, perched || peeking, (id) => motionRegistry?.[id]?.kind)) {
       if (motion) {
         log.info("motion_dropped_held_posture", {
@@ -1175,6 +1195,9 @@ export function createRenderer(options: RendererOptions): Renderer {
       mouth.stop();
     },
     playMotion,
+    setLeaveSeatForOneshot(handler) {
+      leaveSeatForOneshot = handler;
+    },
     getCurrentMotion() {
       const cur = controller?.current();
       return cur ? { id: cur.id, vrma_path: cur.vrma_path } : null;

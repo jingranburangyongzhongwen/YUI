@@ -2,6 +2,7 @@
 import { type Climber, type ClimbTarget, createClimber } from "./ambient/climber";
 import { createFaller, type Faller } from "./ambient/faller";
 import { createJumper } from "./ambient/jumper";
+import { createLeaveSeatThenPlay, type LeaveSeatWindow } from "./ambient/leave-seat";
 import { createPercher, type Percher, type PercherWindow } from "./ambient/percher";
 import { createRootMover, type RootMover } from "./ambient/root-mover";
 import type { Sitter } from "./ambient/sitter";
@@ -561,6 +562,7 @@ export function wireWalker(deps: {
   walkTo(toX: number, onAccepted?: () => void, holdClip?: boolean): Promise<"arrived" | "lost">;
   cancel(): void;
   isStrolling(): boolean;
+  isWalkingTo(): boolean;
   dispose(): void;
 } {
   const { bus, renderer, log } = deps;
@@ -574,6 +576,7 @@ export function wireWalker(deps: {
     ): Promise<"arrived" | "lost"> => (await walker?.walkTo(toX, onAccepted, holdClip)) ?? "lost",
     cancel: () => walker?.cancel(),
     isStrolling: () => walker?.isStrolling() ?? false,
+    isWalkingTo: () => walker?.isWalkingTo() ?? false,
     dispose: () => {
       disposed = true;
       walker?.stop();
@@ -619,13 +622,15 @@ export function wireWalker(deps: {
 /**
  * Horizontal root-motion replay. Tauri-only — the floor path moves the OS window, so in a
  * plain browser (Vite dev) this is skipped and the clip plays in place at the origin.
- * The returned handle cancels a running follow for the owners that outrank it (user drag)
- * and owns teardown.
+ * The mover yields the window to a drag, a perch, a peek, a directed walkTo, or a travel
+ * frame. The returned handle cancels a running follow for the owners that outrank it
+ * (user drag) and owns teardown.
  */
 export function wireRootMover(deps: {
   renderer: Renderer;
   isDragging: () => boolean;
   isPeeking: () => boolean;
+  isHeld: () => boolean;
   setHitTestMoving: (moving: boolean) => void;
   log: Logger;
 }): { cancel(): void; dispose(): void } {
@@ -656,12 +661,87 @@ export function wireRootMover(deps: {
       listMonitors: async () => (await availableMonitors()).map(toScreenMonitor),
       isDragging: deps.isDragging,
       isPeeking: deps.isPeeking,
+      isHeld: deps.isHeld,
       onStart: () => deps.setHitTestMoving(true),
       onEnd: () => deps.setHitTestMoving(false),
     });
     mover.start();
   })().catch((err) => log.warn("root_mover_start_failed", { degrade: true, error: String(err) }));
   return handle;
+}
+
+/**
+ * A published oneshot while perched stands up, plays on the ledge, then sits back.
+ * The host going away drops her. Tauri-only — a browser perch has no OS window to raise.
+ */
+export function wireLeaveSeatThenPlay(deps: {
+  bus: EventBus;
+  renderer: Renderer;
+  sitter: Pick<Sitter, "standUp" | "sitDown">;
+  dropSource: {
+    armedSit(): { windowNumber: number; origin: "commit" | "adopt"; charHpx: number } | null;
+    suspendSit(): {
+      windowNumber: number;
+      origin: "commit" | "adopt";
+      rect: { x: number; y: number };
+      charHpx: number;
+    } | null;
+    resumeSit(edgeLocalYpx: number): void;
+    abandonSit(): void;
+    release(): void;
+  };
+  cancelPercher(): void;
+  onHostLost(): void;
+  setBusy?(busy: boolean): void;
+  log: Logger;
+}): () => void {
+  const { renderer, log } = deps;
+  if (!isTauri()) return () => {};
+  let disposed = false;
+  let petWindow: LeaveSeatWindow | null = null;
+  let listWindows: () => Promise<WindowRect[]> = async () => [];
+  const leave = createLeaveSeatThenPlay({
+    renderer,
+    sitter: deps.sitter,
+    dropSource: deps.dropSource,
+    cancelPercher: deps.cancelPercher,
+    getWindow: () => petWindow,
+    listWindows: () => listWindows(),
+    onSit: (target, edgeLocalYpx) => {
+      deps.bus.push({
+        source: "os_event_watcher",
+        event_name: "avatar.window_sit",
+        ts: Date.now(),
+        hint_tier: 1,
+        dnd_override: true,
+        payload: {
+          edge_local_ypx: edgeLocalYpx,
+          app: target.ownerName,
+          window_title: target.name,
+        },
+      });
+    },
+    onHostLost: deps.onHostLost,
+    setBusy: deps.setBusy,
+  });
+  void (async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const { PhysicalPosition } = await import("@tauri-apps/api/dpi");
+    if (disposed) return;
+    const win = getCurrentWindow();
+    petWindow = {
+      outerPosition: () => win.outerPosition(),
+      scaleFactor: () => win.scaleFactor(),
+      setPositionPhysical: (x, y) => win.setPosition(new PhysicalPosition(x, y)),
+    };
+    listWindows = () => invoke("list_windows") as Promise<WindowRect[]>;
+    renderer.setLeaveSeatForOneshot(leave);
+  })().catch((err) => log.warn("leave_seat_start_failed", { degrade: true, error: String(err) }));
+  return () => {
+    disposed = true;
+    renderer.setLeaveSeatForOneshot(null);
+  };
 }
 
 /**

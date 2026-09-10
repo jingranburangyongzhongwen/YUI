@@ -6,6 +6,7 @@ import {
   wireDispatcherSources,
   wireFaller,
   wireGuardrailsOverrides,
+  wireLeaveSeatThenPlay,
   wirePeekExitTriggers,
   wirePercher,
   wireRootMover,
@@ -527,6 +528,7 @@ const realFactories: ConfiguredBootstrapFactories = {
       renderer,
       isDragging: () => dragging,
       isPeeking: () => peekStateRef?.active() ?? false,
+      isHeld: () => walker.isWalkingTo() || travelFrame.travel.current() != null,
       setHitTestMoving: (moving) => hitTest.setMoving(moving),
       log,
     });
@@ -595,6 +597,7 @@ const realFactories: ConfiguredBootstrapFactories = {
     windowSourcesRef = windowSources;
     register(windowSources.dispose);
 
+    let leaveSeatBusy = false;
     const percher = wirePercher({
       bus,
       renderer,
@@ -602,7 +605,7 @@ const realFactories: ConfiguredBootstrapFactories = {
       getJumpConfig: () => config.get().avatar.jump,
       getFallConfig: () => fallConfigFor(config.get().avatar.fall, fallSettings.get().enabled),
       getMotionKind: (id) => config.get().motions[id]?.kind,
-      isBusy: dispatcher.isPipelineBusy,
+      isBusy: () => dispatcher.isPipelineBusy() || leaveSeatBusy,
       walker,
       sitter,
       dropSource: windowSources,
@@ -617,6 +620,21 @@ const realFactories: ConfiguredBootstrapFactories = {
     percherRef = percher;
     register(percher.dispose);
 
+    register(
+      wireLeaveSeatThenPlay({
+        bus,
+        renderer,
+        sitter,
+        dropSource: windowSources,
+        cancelPercher: () => percherRef?.cancel(),
+        onHostLost: () => faller.drop(),
+        setBusy: (busy) => {
+          leaveSeatBusy = busy;
+        },
+        log,
+      }),
+    );
+
     // Ambient climbing: a wall now and then, a sit on top, then back down to the floor.
     const climber = wireClimber({
       bus,
@@ -630,7 +648,7 @@ const realFactories: ConfiguredBootstrapFactories = {
       getMotionKind: (id) => config.get().motions[id]?.kind,
       isPeeking: () => peekStateRef?.active() ?? false,
       isDragging: () => dragging,
-      isBusy: dispatcher.isPipelineBusy,
+      isBusy: () => dispatcher.isPipelineBusy() || leaveSeatBusy,
       walker,
       faller,
       sitter,

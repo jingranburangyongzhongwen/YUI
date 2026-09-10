@@ -1361,6 +1361,7 @@ export function createClimber(deps: ClimberDeps): Climber {
         return;
       }
       if (nowMs < dwellAtMs) return;
+      if (deps.isBusy()) return;
       dwellAtMs = -1;
       void launch(runDown);
       return;
