@@ -16,6 +16,7 @@ import type { MotionRegistry } from "../contract";
 import {
   createMotionController,
   needsRestartOnPoolChange,
+  playbackAfterRegistrySwap,
   poolSelectionChanged,
   type ResolvedMotion,
   shouldRestartIdle,
@@ -1090,6 +1091,35 @@ describe("shouldRestartIdle()", () => {
 
   it("does not restart when nothing is playing yet", () => {
     expect(shouldRestartIdle(before, after, null, "idle")).toBe(false);
+  });
+});
+
+describe("playbackAfterRegistrySwap()", () => {
+  const registry: MotionRegistry = {
+    idle: {
+      vrma_path: "/motions/calm.vrma",
+      kind: "ambient",
+      loop: true,
+      priority: 0,
+      interrupt_policy: "replace",
+    },
+    spin: {
+      vrma_path: "/custom_motions/spin.vrma",
+      kind: "oneshot",
+      loop: false,
+      priority: 70,
+      interrupt_policy: "replace",
+    },
+  };
+
+  it("keeps a clip whose id is still in the new registry", () => {
+    expect(playbackAfterRegistrySwap({ id: "spin" }, registry)).toBe("keep");
+    expect(playbackAfterRegistrySwap({ id: "idle" }, registry)).toBe("keep");
+  });
+
+  it("returns idle when nothing is playing or the id vanished", () => {
+    expect(playbackAfterRegistrySwap(null, registry)).toBe("idle");
+    expect(playbackAfterRegistrySwap({ id: "gone" }, registry)).toBe("idle");
   });
 });
 

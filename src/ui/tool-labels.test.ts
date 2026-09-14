@@ -25,6 +25,14 @@ describe("getToolLabel (default English)", () => {
     expect(getToolLabel("terminal")).toBe("Running…");
   });
 
+  it("returns English label for write_file", () => {
+    expect(getToolLabel("write_file")).toBe("Writing…");
+  });
+
+  it("returns English label for pkl_to_dance", () => {
+    expect(getToolLabel("pkl_to_dance")).toBe("Learning a dance…");
+  });
+
   it("humanizes an unmapped snake_case tool id", () => {
     expect(getToolLabel("kb_get_ids")).toBe("Kb get ids…");
   });

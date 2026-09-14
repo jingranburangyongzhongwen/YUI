@@ -157,6 +157,18 @@ export function shouldRestartIdle(
   return poolSelectionChanged(previous, next) && needsRestartOnPoolChange(current, poolId);
 }
 
+/**
+ * Whether swapping the live registry should keep the clip that is already playing.
+ * A still-registered id keeps mixer state; a vanished id falls back to idle.
+ */
+export function playbackAfterRegistrySwap(
+  playing: { id: string } | null,
+  registry: MotionRegistry,
+): "keep" | "idle" {
+  if (playing && registry[playing.id]) return "keep";
+  return "idle";
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────

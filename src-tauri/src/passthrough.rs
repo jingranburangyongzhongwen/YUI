@@ -27,24 +27,43 @@ pub(crate) fn desired_exstyle(baseline: u32, ignore: bool, transparent_bit: u32)
     }
 }
 
+/// Parent HWND bit for OLE `WindowFromPoint`: clearing is not a baseline restore.
+pub(crate) fn with_transparent_bit(current: u32, transparent: bool, bit: u32) -> u32 {
+    if transparent {
+        current | bit
+    } else {
+        current & !bit
+    }
+}
+
 /// Toggles click-through on the webview window.
 ///
 /// Always calls `set_ignore_cursor_events` on the top-level window. On Windows,
 /// also walks every child HWND (WebView2 subtree) and syncs `WS_EX_TRANSPARENT`
 /// so mouse events are not intercepted by the child windows before they reach the
 /// desktop compositor.
-#[command]
-pub fn set_click_through<R: Runtime>(window: WebviewWindow<R>, ignore: bool) -> Result<(), String> {
+pub(crate) fn apply_click_through<R: Runtime>(
+    window: &WebviewWindow<R>,
+    ignore: bool,
+) -> Result<(), String> {
     window
         .set_ignore_cursor_events(ignore)
         .map_err(|e| e.to_string())?;
 
     #[cfg(target_os = "windows")]
     {
-        windows_set_children_transparent(&window, ignore).map_err(|e| e.to_string())?;
+        windows_set_children_transparent(window, ignore).map_err(|e| e.to_string())?;
+        if !ignore {
+            windows_force_parent_hit_testable(window).map_err(|e| e.to_string())?;
+        }
     }
 
     Ok(())
+}
+
+#[command]
+pub fn set_click_through<R: Runtime>(window: WebviewWindow<R>, ignore: bool) -> Result<(), String> {
+    apply_click_through(&window, ignore)
 }
 
 // ─── Windows-only FFI ────────────────────────────────────────────────────────
@@ -59,7 +78,8 @@ mod win {
         Win32::{
             Foundation::{HWND, LPARAM},
             UI::WindowsAndMessaging::{
-                EnumChildWindows, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
+                EnumChildWindows, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
             },
         },
     };
@@ -104,6 +124,26 @@ mod win {
         BOOL(1) // continue enumeration
     }
 
+    pub(super) fn set_transparent(hwnd: HWND, transparent: bool) {
+        let current = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        let desired = super::with_transparent_bit(current, transparent, WS_EX_TRANSPARENT);
+        if desired == current {
+            return;
+        }
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired as isize);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+    }
+
     /// Walk all child HWNDs under `parent` and apply the click-through EXSTYLE.
     pub(super) fn apply_children(parent: HWND, ignore: bool) {
         let payload = EnumPayload { ignore };
@@ -130,6 +170,16 @@ fn windows_set_children_transparent<R: Runtime>(
     let hwnd_raw = window.hwnd()?.0;
     let parent = HWND(hwnd_raw);
     win::apply_children(parent, ignore);
+    Ok(())
+}
+
+/// Clears `WS_EX_TRANSPARENT` on the top-level HWND so OLE `WindowFromPoint` can see it.
+#[cfg(target_os = "windows")]
+fn windows_force_parent_hit_testable<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<()> {
+    use windows::Win32::Foundation::HWND;
+
+    let hwnd_raw = window.hwnd()?.0;
+    win::set_transparent(HWND(hwnd_raw), false);
     Ok(())
 }
 
@@ -181,6 +231,17 @@ mod tests {
         assert_eq!(
             result, baseline,
             "idempotent: already-present bit unchanged"
+        );
+    }
+
+    #[test]
+    fn parent_hit_testable_clears_transparent_and_keeps_layered() {
+        let layered = WS_EX_TRANSPARENT | 0x0008_0000;
+        let result = with_transparent_bit(layered, false, WS_EX_TRANSPARENT);
+        assert_eq!(result, 0x0008_0000);
+        assert_eq!(
+            with_transparent_bit(0x0008_0000, true, WS_EX_TRANSPARENT),
+            layered
         );
     }
 }

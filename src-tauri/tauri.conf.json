@@ -22,7 +22,8 @@
         "alwaysOnTop": true,
         "resizable": true,
         "shadow": false,
-        "backgroundThrottling": "disabled"
+        "backgroundThrottling": "disabled",
+        "dragDropEnabled": true
       }
     ],
     "security": {

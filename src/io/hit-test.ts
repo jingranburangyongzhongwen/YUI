@@ -308,7 +308,7 @@ export function createHitTestController(opts: HitTestOptions): HitTestController
     if (doc.visibilityState === "hidden") return;
     const ms = opts.getConfig().poll_interval_ms ?? DEFAULTS.poll_interval_ms;
     pollHandle = schedule(() => {
-      void poll();
+      return poll();
     }, ms);
   }
 
@@ -354,6 +354,7 @@ export function createHitTestController(opts: HitTestOptions): HitTestController
       // cursorPosition() is still in flight — skip this sample (don't return: the
       // reschedule below must still run, or the loop dies with the window stuck
       // click-through). The next tick's cachedOrigin === null forces a fresh refresh.
+      if (!running || suspended || state !== "passthrough") return;
       if (cachedOrigin !== null) {
         pollFailureCount = 0;
         const local = physicalCursorToLocalCss(cursor, cachedOrigin, cachedSf, cachedCursorSf);

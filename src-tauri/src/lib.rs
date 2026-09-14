@@ -23,6 +23,12 @@ mod import_fs;
 // Bring-your-own-VRM import (file copy into app-data).
 mod vrm_import;
 
+// WHAM pkl → custom_motions VRMA install.
+mod pkl_import;
+
+// File-drag arming so a click-through pet can receive onDragDropEvent.
+mod file_drag;
+
 // Bring-your-own-voice import (reference clip copy into app-data).
 mod voice_import;
 
@@ -237,6 +243,7 @@ pub fn run() {
 
             // Start OS event polling loop (emits `os_event` IPC to webview).
             os_event_watcher::start(app.handle());
+            file_drag::start(app.handle());
             tray::setup(app.handle())?;
             // Loopback ingress starts via the `start_agent_ingress` command, invoked
             // once at boot with the user's stored port (restart-to-apply).
@@ -249,6 +256,7 @@ pub fn run() {
             screenshot::capture_screen,
             vrm_import::import_vrm_file,
             vrm_import::remove_user_vrm,
+            pkl_import::import_pkl_motion,
             voice_import::import_voice_file,
             voice_import::remove_user_voice,
             passthrough::set_click_through,

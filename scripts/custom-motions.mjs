@@ -13,6 +13,14 @@ export const CUSTOM_MOTIONS_DIR = "public/custom_motions";
  * moves the OS window instead of sliding off the canvas.
  */
 export function overlayFromVrmaFilenames(files) {
+  /** @type {Record<string, {
+    vrma_path: string,
+    kind: "oneshot",
+    loop: false,
+    priority: number,
+    interrupt_policy: "replace",
+    root_lock_xz: true,
+  }>} */
   const overlay = {};
   for (const file of files) {
     if (!file.toLowerCase().endsWith(".vrma")) continue;
@@ -37,7 +45,11 @@ export function readLocalMotionsOverlay(cwd = process.cwd()) {
   return overlayFromVrmaFilenames(files);
 }
 
-/** Merge folder-scanned clips onto the shipped catalog. Colliding ids fail loud. */
+/**
+ * Merge folder-scanned clips onto the shipped catalog. Colliding ids fail loud.
+ * @param {Record<string, unknown>} base
+ * @param {Record<string, unknown>} [overlay]
+ */
 export function mergeCustomMotions(base, overlay) {
   const extra = overlay && typeof overlay === "object" ? overlay : {};
   const ids = Object.keys(extra);

@@ -177,7 +177,8 @@ schedule cue never carries it. A second `cue note:` line follows only when
 `cue.context` is present — free-text intent the user authored for that cue. The
 built-in touch and gesture cues (`touch_*`, `tap_bored`, `head_pat`, `drag_held`,
 `window_sit`, `peek`, `dropped`) send a label alone unless the user authored a `context`
-for them in `configs/avatar.json`, so most of those turns render just the headline. A
+for them in `configs/avatar.json`, so most of those turns render just the headline.
+`pkl_dance` also sends `installed as motion_id <id>; now playing`. A
 proactive turn with `idle_elapsed_min` but no cue at all (no configured label) falls back
 to a bare `trigger: proactive (user idle Xmin)`.
 
@@ -314,6 +315,7 @@ all situational detail still lives in the trigger lines above.
 | `proactive.window_sit` | `(I just sat you down on a window's edge)` |
 | `proactive.peek` | `(I left you peeking out from the screen edge)` |
 | `proactive.dropped` | `(I just dropped you from mid-air)` |
+| `proactive.pkl_dance` | `(I just dropped a dance file onto you)` |
 | `proactive.screen_app_switched` | `(I just moved over to something else on my screen)` |
 | `proactive.screen_long_session` | `(I've been in the same thing on my screen for a while)` |
 | `proactive.*` (other) | `(I've gone quiet for a while)` |

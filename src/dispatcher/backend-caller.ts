@@ -77,6 +77,7 @@ function backgroundMarker(eventName: string, trigger: TriggerMeta): string {
   if (eventName === "proactive.window_sit") return "(I just sat you down on a window's edge)";
   if (eventName === "proactive.peek") return "(I left you peeking out from the screen edge)";
   if (eventName === "proactive.dropped") return "(I just dropped you from mid-air)";
+  if (eventName === "proactive.pkl_dance") return "(I just dropped a dance file onto you)";
   if (eventName === "proactive.screen_app_switched") {
     return "(I just moved over to something else on my screen)";
   }
@@ -115,6 +116,7 @@ const REFLEX_EVENT_NAMES = new Set([
   "proactive.window_sit",
   "proactive.peek",
   "proactive.dropped",
+  "proactive.pkl_dance",
 ]);
 
 export function isReflexTurn(eventName: string): boolean {

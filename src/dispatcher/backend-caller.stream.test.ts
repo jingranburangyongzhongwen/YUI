@@ -21,6 +21,7 @@ import {
   makeLogger,
   makeTurnOutput,
   peekEnv,
+  pklDanceEnv,
   toolStatusEvent,
   touchEnv,
   turnOf,
@@ -513,6 +514,7 @@ describe("backend_caller — TTFT thinking lifecycle", () => {
     ["proactive.peek", peekEnv],
     ["proactive.head_pat", headPatEnv],
     ["proactive.dropped", droppedEnv],
+    ["proactive.pkl_dance", pklDanceEnv],
   ] as const)("reflex turn (%s) skips thinking even when hasFiller true", async (_name, env) => {
     caller = makeCaller(true);
     script.events = [deltaEvent("꺅"), completedEvent({ speech_text: "꺅" })];

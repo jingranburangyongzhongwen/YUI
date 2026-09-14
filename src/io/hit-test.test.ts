@@ -395,6 +395,47 @@ describe("createHitTestController — suspend/resume", () => {
     c.stop();
   });
 
+  it("does not restore click-through from an in-flight poll after suspend", async () => {
+    let release: (value: { x: number; y: number }) => void = () => {};
+    let cb: (() => void | Promise<void>) | undefined;
+    const win = fakeWindow();
+    win.cursorPosition.mockImplementation(
+      () =>
+        new Promise<{ x: number; y: number }>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const target = new EventTarget();
+    const c = createHitTestController({
+      getWindow: () => win as never,
+      moveTarget: target,
+      isOverInteractive: () => false,
+      getConfig: () => cfg,
+      doc: fakeDoc() as never,
+      schedule: (callback) => {
+        cb = callback;
+        return 0;
+      },
+      cancel: () => {},
+    });
+    await startSynced(c, win);
+    move(target);
+    await Promise.resolve();
+    move(target);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cb).toBeDefined();
+
+    const pending = Promise.resolve(cb?.());
+    c.suspend("capture", "pkl-drop");
+    await vi.waitFor(() => expect(win.setIgnoreCursorEvents).toHaveBeenLastCalledWith(false));
+    win.setIgnoreCursorEvents.mockClear();
+    release({ x: 0, y: 0 });
+    await pending;
+    expect(win.setIgnoreCursorEvents).not.toHaveBeenCalledWith(true);
+    c.stop();
+  });
+
   it("is idempotent — suspend() from the initial CAPTURE state makes no IPC call", async () => {
     const win = fakeWindow();
     const c = createHitTestController({

@@ -47,6 +47,7 @@ import { createFrontmostTracker } from "./io/frontmost-tracker";
 import { createHitTestController, type HitTestController } from "./io/hit-test";
 import { enabledIdleVariants } from "./io/idle-motion-settings";
 import { createPeekState } from "./io/peek-state";
+import { createPklDropSource, PKL_DROP_HIT_OWNER } from "./io/pkl-drop-source";
 import type { DescentEdge } from "./io/screen-geometry";
 import { mergeScreen } from "./io/screen-settings";
 import type { ScreenCapturer } from "./io/screen-source-provider";
@@ -475,6 +476,29 @@ const realFactories: ConfiguredBootstrapFactories = {
     });
     hitTest.start();
     register(hitTest.stop);
+    if (isTauri()) {
+      const pklDrop = createPklDropSource({
+        bus,
+        renderer,
+        surfaces,
+        getReservedIds: () => Object.keys(config.get().motions),
+        reloadConfig: () => config.reload(),
+        holdPointerCapture: (hold) => {
+          if (hold) hitTest.suspend("capture", PKL_DROP_HIT_OWNER);
+          else hitTest.resume(PKL_DROP_HIT_OWNER);
+        },
+      });
+      void pklDrop.start();
+      register(pklDrop.stop);
+      if (import.meta.env.DEV) {
+        Object.assign(globalThis as Record<string, unknown>, {
+          __yui_pklDrop: pklDrop.handleEvent,
+        });
+        register(() => {
+          delete (globalThis as Record<string, unknown>).__yui_pklDrop;
+        });
+      }
+    }
     const cursorTracker = createCursorTracker({
       onCursor: (point) => renderer.setGazeCursor(point),
     });

@@ -21,6 +21,36 @@ const MIME: Record<string, string> = {
   ".wav": "audio/wav",
 };
 
+/** Dev-only: POST `/__yui/pkl-drop` forwards a drop event into the live webview. */
+function devPklDrop(): Plugin {
+  return {
+    name: "yui-dev-pkl-drop",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = (req.originalUrl ?? req.url ?? "").split("?")[0];
+        if (url !== "/__yui/pkl-drop") return next();
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          return res.end();
+        }
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          try {
+            const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            server.ws.send({ type: "custom", event: "yui-pkl-drop", data });
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("ok");
+          } catch (err) {
+            res.statusCode = 400;
+            res.end(err instanceof Error ? err.message : String(err));
+          }
+        });
+      });
+    },
+  };
+}
+
 /** Dev-only: fold `public/custom_motions/*.vrma` into `/configs/motions.json`. */
 function serveCustomMotions(): Plugin {
   return {
@@ -97,6 +127,7 @@ export default defineConfig(() => ({
     },
   },
   plugins: [
+    devPklDrop(),
     serveCustomMotions(),
     serveDir("/vrms", "resources/vrms"),
     serveDir("/configs", "configs"),

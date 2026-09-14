@@ -173,6 +173,22 @@ export function droppedEnv(): BusEnvelope {
   };
 }
 
+export function pklDanceEnv(): BusEnvelope {
+  return {
+    seq_id: 8,
+    source: "os_event_watcher",
+    event_name: "proactive.pkl_dance",
+    ts: 1_717_000_000_000,
+    payload: {
+      cue_id: "pkl_dance",
+      label: "new dance from a dropped motion capture",
+      context: "installed as motion_id spin; now playing",
+    },
+    hint_tier: 2,
+    dnd_override: true,
+  };
+}
+
 export function completedEvent(env: ControlEnvelope, responseId = "resp_new"): ChatStreamEvent {
   return { type: "completed", envelope: env, responseId };
 }

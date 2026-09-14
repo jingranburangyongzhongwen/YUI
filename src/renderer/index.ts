@@ -23,7 +23,12 @@ import {
 import { createVRMAnimationClip, VRMAnimationLoaderPlugin } from "@pixiv/three-vrm-animation";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import type { ControlEnvelope, EmotionRegistry, MotionRegistry } from "../contract";
+import type {
+  ControlEnvelope,
+  EmotionRegistry,
+  MotionRegistry,
+  MotionRegistryEntry,
+} from "../contract";
 import { createLogger } from "../logger";
 import { type AlphaHitTest, createAlphaHitTest } from "./alpha-hit-test";
 import { routeDirective } from "./apply-directive";
@@ -46,6 +51,7 @@ import { mirrorClipTracks } from "./mirror-clip";
 import {
   createMotionController,
   type MotionController,
+  playbackAfterRegistrySwap,
   poolSelectionChanged,
   type RenderMotionSignal,
   type ResolvedMotion,
@@ -194,8 +200,13 @@ export interface Renderer {
   /** Currently committed motion (variant-resolved) — null before any playback. */
   getCurrentMotion(): { id: string; vrma_path: string } | null;
   /**
-   * Inject (or replace) motion registry. When injected, (re)generates MotionController; if
-   * VRM is already loaded, plays the idle baseline.
+   * Merge one motion into the live registry without restarting the current clip.
+   * Used to hot-play a just-installed custom clip before the next config poll.
+   */
+  upsertMotion(id: string, entry: MotionRegistryEntry): void;
+  /**
+   * Inject (or replace) motion registry. When injected, (re)generates MotionController.
+   * A still-registered playing clip is kept; otherwise idle starts if a VRM is loaded.
    */
   setMotionRegistry(registry: MotionRegistry): void;
   /**
@@ -286,6 +297,8 @@ export interface Renderer {
   setPerchTarget(target: { edgeLocalYpx: number } | null): void;
   /** Current perch active state — used by occlusion poll to detect perch end. */
   isPerched(): boolean;
+  /** Current side-peek pin — a published oneshot while peeking still plays in place. */
+  isPeeking(): boolean;
   /** Set the side-peek edge pin, or clear it and restore the horizontal baseline. */
   setPeekTarget(target: { targetXpx: number } | null): void;
   /** Select mirrored clips for motions started after this call without restarting playback. */
@@ -1086,11 +1099,21 @@ export function createRenderer(options: RendererOptions): Renderer {
     }
   }
 
+  function upsertMotion(id: string, entry: MotionRegistryEntry): void {
+    motionRegistry = { ...(motionRegistry ?? {}), [id]: entry };
+    controller = newMotionController(motionRegistry);
+  }
+
   function setMotionRegistry(registry: MotionRegistry): void {
+    const playing = controller?.current() ?? null;
     motionRegistry = registry;
     controller = newMotionController(registry);
-    // If VRM is already loaded, immediately start idle baseline.
-    if (currentVrm && mixer) playIdleBaseline();
+    if (!currentVrm || !mixer) return;
+    if (playbackAfterRegistrySwap(playing, registry) === "keep" && playing) {
+      controller.commit({ action: "play", motion: playing });
+      return;
+    }
+    playIdleBaseline();
   }
 
   function setIdleVariants(paths: readonly string[]): void {
@@ -1202,6 +1225,7 @@ export function createRenderer(options: RendererOptions): Renderer {
       const cur = controller?.current();
       return cur ? { id: cur.id, vrma_path: cur.vrma_path } : null;
     },
+    upsertMotion,
     setMotionRegistry,
     setIdleVariants,
     setEmotionRegistry,
@@ -1298,6 +1322,9 @@ export function createRenderer(options: RendererOptions): Renderer {
     },
     isPerched() {
       return pins.isPerched();
+    },
+    isPeeking() {
+      return pins.isPeeking();
     },
     setPeekTarget(target) {
       const changed = pins.setPeekTarget(target);
