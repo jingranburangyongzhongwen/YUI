@@ -3,8 +3,9 @@ import type { MotionRegistryEntry } from "../contract";
 import type { BusEnvelope } from "../dispatcher/event-bus";
 import {
   createPklDropSource,
-  firstPklPath,
+  firstDancePath,
   isPklPath,
+  isVideoPath,
   mapTauriDragDrop,
   PKL_CONVERT_MOTION,
   PKL_CONVERT_TOOL_ID,
@@ -19,7 +20,12 @@ function entry(): MotionRegistryEntry {
   return customMotionEntry("spin.vrma");
 }
 
-function harness(opts?: { perched?: boolean; peeking?: boolean; importError?: boolean }) {
+function harness(opts?: {
+  perched?: boolean;
+  peeking?: boolean;
+  importError?: boolean;
+  whamBaseUrl?: string;
+}) {
   const pushed: BusEnvelope[] = [];
   const bus = {
     push: vi.fn((env: BusEnvelope) => {
@@ -43,6 +49,10 @@ function harness(opts?: { perched?: boolean; peeking?: boolean; importError?: bo
     if (opts?.importError) throw new Error("conversion failed");
     return { id: "spin", entry: entry() };
   });
+  const importVideo = vi.fn(async () => {
+    if (opts?.importError) throw new Error("conversion failed");
+    return { id: "spin", entry: entry() };
+  });
   const reloadConfig = vi.fn(async () => true);
   const holdPointerCapture = vi.fn();
   const source = createPklDropSource({
@@ -51,11 +61,13 @@ function harness(opts?: { perched?: boolean; peeking?: boolean; importError?: bo
     surfaces,
     getReservedIds: () => ["idle", "dance"],
     importPkl,
+    importVideo,
+    getWhamUrl: () => opts?.whamBaseUrl ?? "http://127.0.0.1:8767",
     reloadConfig,
     holdPointerCapture,
     now: () => 1_700,
   });
-  return { source, pushed, renderer, surfaces, importPkl, reloadConfig, holdPointerCapture };
+  return { source, pushed, renderer, surfaces, importPkl, importVideo, reloadConfig, holdPointerCapture };
 }
 
 const pos = { x: 40, y: 80 };
@@ -72,8 +84,18 @@ describe("pkl path helpers", () => {
   it("accepts .pkl ignoring case and Windows separators", () => {
     expect(isPklPath("C:\\\\clips\\\\Spin.PKL")).toBe(true);
     expect(isPklPath("/tmp/clip.vrma")).toBe(false);
-    expect(firstPklPath(["/a.txt", "/b.pkl", "/c.pkl"])).toBe("/b.pkl");
-    expect(firstPklPath(["/a.txt"])).toBeNull();
+  });
+
+  it("picks the first pkl or video path as a dance drop", () => {
+    expect(isVideoPath("C:\\\\clips\\\\Dance.MP4")).toBe(true);
+    expect(isVideoPath("/tmp/clip.mov")).toBe(true);
+    expect(isVideoPath("/tmp/clip.webm")).toBe(false);
+    expect(isVideoPath("/tmp/clip.vrma")).toBe(false);
+    expect(firstDancePath(["/a.txt", "/b.mov"])).toBe("/b.mov");
+    expect(firstDancePath(["/a.webm"])).toBeNull();
+    expect(firstDancePath(["/a.mp4", "/b.pkl"])).toBe("/a.mp4");
+    expect(firstDancePath(["/a.pkl", "/b.mp4"])).toBe("/a.pkl");
+    expect(firstDancePath(["/a.txt"])).toBeNull();
   });
 });
 
@@ -121,12 +143,13 @@ describe("createPklDropSource", () => {
   });
 
   it("converts a pkl drop, shows the chip, plays the drop pose then the new dance", async () => {
-    const { source, renderer, surfaces, importPkl, pushed, reloadConfig } = harness();
+    const { source, renderer, surfaces, importPkl, importVideo, pushed, reloadConfig } = harness();
     source.handleEvent(drop(["/tmp/note.txt", "/tmp/spin.pkl"]));
     await vi.waitFor(() => expect(importPkl).toHaveBeenCalled());
     expect(surfaces.showTool).toHaveBeenCalledWith(PKL_CONVERT_TOOL_ID);
     expect(renderer.playMotion).toHaveBeenCalledWith({ id: PKL_DROP_MOTION });
     expect(importPkl).toHaveBeenCalledWith("/tmp/spin.pkl", ["idle", "dance"]);
+    expect(importVideo).not.toHaveBeenCalled();
     expect(renderer.upsertMotion).toHaveBeenCalledWith("spin", entry());
     expect(renderer.playMotion).toHaveBeenLastCalledWith({ id: "spin" });
     expect(surfaces.finishTool).toHaveBeenCalled();
@@ -143,6 +166,35 @@ describe("createPklDropSource", () => {
         },
       }),
     ]);
+  });
+
+  it("converts a video drop through WHAM instead of the local pkl converter", async () => {
+    const { source, importPkl, importVideo, renderer, surfaces } = harness();
+    source.handleEvent(drop(["/tmp/spin.mp4"]));
+    await vi.waitFor(() => expect(renderer.playMotion).toHaveBeenLastCalledWith({ id: "spin" }));
+    expect(importPkl).not.toHaveBeenCalled();
+    expect(importVideo).toHaveBeenCalledWith("/tmp/spin.mp4", ["idle", "dance"]);
+    expect(surfaces.showTool).toHaveBeenCalledWith(PKL_CONVERT_TOOL_ID);
+  });
+
+  it("does not learn from a video drop when WHAM is unset", async () => {
+    const { source, importPkl, importVideo, renderer, surfaces, pushed } = harness({
+      whamBaseUrl: "  ",
+    });
+    source.handleEvent(drop(["/tmp/spin.mp4"]));
+    await Promise.resolve();
+    expect(importVideo).not.toHaveBeenCalled();
+    expect(importPkl).not.toHaveBeenCalled();
+    expect(surfaces.showTool).not.toHaveBeenCalled();
+    expect(renderer.playMotion).not.toHaveBeenCalled();
+    expect(pushed).toEqual([]);
+  });
+
+  it("still converts a pkl drop when WHAM is unset", async () => {
+    const { source, importPkl, importVideo } = harness({ whamBaseUrl: "" });
+    source.handleEvent(drop(["/tmp/spin.pkl"]));
+    await vi.waitFor(() => expect(importPkl).toHaveBeenCalled());
+    expect(importVideo).not.toHaveBeenCalled();
   });
 
   it("switches to the converting loop when import is still running", async () => {

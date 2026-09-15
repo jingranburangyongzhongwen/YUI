@@ -715,6 +715,18 @@ ${switchRowsHtml("react", 8) || "        "}
           </div>
         </details>
 
+        <details class="yui-endpoints yui-svc" data-svc="wham">
+          <summary><span class="svc-name">${t("svc.wham")}</span><span class="yui-endpoints__hint">${t("svc.wham_hint")}</span></summary>
+          <div class="yui-endpoints__body">
+            <div class="yui-input-row">
+              <label class="yui-input-row__label" for="yui-svc-wham-type">${t("svc.type_label")}</label>
+              <select class="yui-select yui-select--single" id="yui-svc-wham-type" disabled><option>${t("svc.wham_type")}</option></select>
+            </div>
+            ${endpointRowHtml("wham_base_url")}
+            <button class="yui-reset yui-svc-reset" type="button" data-svc-reset="wham">${t("svc.reset_wham")}</button>
+          </div>
+        </details>
+
         <div class="yui-quick__divider" aria-hidden="true"></div>
         <details class="yui-section" data-section="perf"${sectionOpenAttr("perf")}>
         <summary><span class="yui-quick__section">${t("perf.section")}</span></summary>

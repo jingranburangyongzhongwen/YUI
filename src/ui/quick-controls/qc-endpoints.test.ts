@@ -128,7 +128,7 @@ describe("createQuickControls — endpoints + API keys", () => {
     const sections = Array.from(
       qc.el.querySelectorAll<HTMLDetailsElement>("#yui-panel-adv details.yui-svc"),
     );
-    expect(sections.map((s) => s.dataset.svc)).toEqual(["chat", "stt", "tts", "broker"]);
+    expect(sections.map((s) => s.dataset.svc)).toEqual(["chat", "stt", "tts", "broker", "wham"]);
     // collapsible (default collapsed) + each leads with a type dropdown.
     for (const s of sections) {
       expect(s.open).toBe(false);
@@ -150,6 +150,7 @@ describe("createQuickControls — endpoints + API keys", () => {
     expect(fieldIn("stt", "stt_base_url")).toBe(true);
     expect(fieldIn("tts", "tts_base_url")).toBe(true);
     expect(fieldIn("broker", "broker_base_url")).toBe(true);
+    expect(fieldIn("wham", "wham_base_url")).toBe(true);
 
     qc.dispose();
   });
@@ -921,6 +922,29 @@ describe("createQuickControls — endpoints + API keys", () => {
 
     qc.el.querySelector<HTMLButtonElement>('.yui-svc-reset[data-svc-reset="broker"]')!.click();
     expect(endpointsSettings.get().broker_base_url).toBe("");
+    expect(input.value).toBe("");
+
+    qc.dispose();
+  });
+
+  it("renders a wham_base_url endpoint row that persists and clears on the WHAM reset", () => {
+    const qc = buildQc();
+    qc.open();
+
+    const row = qc.el.querySelector<HTMLDivElement>(
+      '.yui-input-row[data-ep-field="wham_base_url"]',
+    );
+    expect(row).not.toBeNull();
+    const input = row!.querySelector<HTMLInputElement>(".yui-ep-input")!;
+    expect(input.classList.contains("yui-ep-input--url")).toBe(true);
+
+    input.value = "http://127.0.0.1:8767";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(endpointsSettings.get().wham_base_url).toBe("http://127.0.0.1:8767");
+
+    qc.el.querySelector<HTMLButtonElement>('.yui-svc-reset[data-svc-reset="wham"]')!.click();
+    expect(endpointsSettings.get().wham_base_url).toBe("");
     expect(input.value).toBe("");
 
     qc.dispose();

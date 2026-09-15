@@ -327,6 +327,7 @@ const en: Record<string, string> = {
   "endpoints.stt_base_url.label": "Speech recognition (STT) server URL",
   "endpoints.tts_base_url.label": "Speech synthesis (TTS) server URL",
   "endpoints.broker_base_url.label": "Expression broker URL",
+  "endpoints.wham_base_url.label": "WHAM server URL",
   "endpoints.chat_model.label": "Chat model",
 
   // per-service sections (advanced tab)
@@ -347,10 +348,14 @@ const en: Record<string, string> = {
   "svc.broker": "Broker",
   "svc.broker_hint": "MCP streamable-http",
   "svc.broker_type": "MCP streamable-http",
+  "svc.wham": "WHAM",
+  "svc.wham_hint": "Video to dance",
+  "svc.wham_type": "WHAM HTTP",
   "svc.reset_chat": "Reset Chat",
   "svc.reset_stt": "Reset STT",
   "svc.reset_tts": "Reset TTS",
   "svc.reset_broker": "Reset Broker",
+  "svc.reset_wham": "Reset WHAM",
 
   // chat API key
   "chatkey.section": "Chat API key",

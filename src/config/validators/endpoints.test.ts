@@ -62,6 +62,11 @@ describe("validateEndpoints — happy path", () => {
     const out = validateEndpoints(FILE, baseRaw({ broker_base_url: "http://localhost:9100" }));
     expect(out.broker_base_url).toBe("http://localhost:9100");
   });
+
+  it("carries through wham_base_url", () => {
+    const out = validateEndpoints(FILE, baseRaw({ wham_base_url: "http://127.0.0.1:8767" }));
+    expect(out.wham_base_url).toBe("http://127.0.0.1:8767");
+  });
 });
 
 describe("validateEndpoints — unconfigured (empty) endpoints", () => {
@@ -102,6 +107,11 @@ describe("validateEndpoints — unconfigured (empty) endpoints", () => {
   it("reads an empty broker_base_url as unset rather than a malformed URL", () => {
     const out = validateEndpoints(FILE, baseRaw({ broker_base_url: "" }));
     expect(out.broker_base_url).toBeUndefined();
+  });
+
+  it("reads an empty wham_base_url as unset rather than a malformed URL", () => {
+    const out = validateEndpoints(FILE, baseRaw({ wham_base_url: "" }));
+    expect(out.wham_base_url).toBeUndefined();
   });
 });
 
@@ -191,6 +201,10 @@ describe("validateEndpoints — tts_model / tts_speaker", () => {
 describe("validateEndpoints — broker_base_url / tts_max_inflight / context window", () => {
   it("rejects an invalid broker_base_url", () => {
     expectIssue(baseRaw({ broker_base_url: "ftp://x" }), "broker_base_url는 http(s) URL이어야 함");
+  });
+
+  it("rejects an invalid wham_base_url", () => {
+    expectIssue(baseRaw({ wham_base_url: "ftp://x" }), "wham_base_url는 http(s) URL이어야 함");
   });
 
   it("rejects a non-integer tts_max_inflight", () => {

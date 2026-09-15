@@ -7,14 +7,14 @@
  *
  * Render rules:
  *  - emotion present → expression transition; ABSENT → hold previous.
- *  - motion present → registry lookup + play; ABSENT or null → idle.
+ *  - motion present → play; ABSENT → hold previous; explicit null → idle.
  *  - `emotion === null` OR absent → NO-OP (hold previous); only an explicit
  *    `{id:"neutral"}` transitions to neutral. setEmotion(null) is itself a NO-OP hold.
  *  - `_reserved` ignored.
  *
- * Note the deliberate asymmetry between the two channels:
- *  - emotion ABSENT → *passive* hold: do not touch the expression at all (no setEmotion call).
- *  - motion ABSENT/null → *active* return to idle: call playMotion(null).
+ * Both channels hold when the key is absent. Motion still returns to idle on an
+ * explicit `motion: null` (dispatcher drag_end / perch-clear); emotion has no
+ * equivalent baseline signal — only `{id:"neutral"}` eases the face.
  *
  * Out of scope for this layer (other tracks own them):
  * speech_text, tool_status, emotion_text (a TTS voice tag routed via the cue channel,
@@ -37,7 +37,8 @@ interface DirectiveSinks {
  *   A present `null` is forwarded as setEmotion(null), which is treated as a NO-OP hold. Any
  *   signal (including unregistered ids) is forwarded verbatim — the EmotionResolver owns
  *   fallback, not this routing layer.
- * - Motion: forward always — absent or null both become playMotion(null) → return to idle.
+ * - Motion: forward only when the key is present. Absent holds the playing clip; a present
+ *   `null` is playMotion(null) → idle.
  */
 export function routeDirective(env: ControlEnvelope, sinks: DirectiveSinks): void {
   // Emotion: present → transition, absent → hold (no call).
@@ -45,6 +46,8 @@ export function routeDirective(env: ControlEnvelope, sinks: DirectiveSinks): voi
     sinks.setEmotion(env.emotion ?? null);
   }
 
-  // Motion: present → play, absent or null → idle.
-  sinks.playMotion(env.motion ?? null);
+  // Motion: present → play (null → idle), absent → hold (no call).
+  if ("motion" in env) {
+    sinks.playMotion(env.motion ?? null);
+  }
 }

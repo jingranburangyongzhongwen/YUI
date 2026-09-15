@@ -4,7 +4,7 @@
 python pkl2vrma/wham_to_vrma.py path/to/wham.pkl --install
 ```
 
-Writes `public/custom_motions/<stem>.vrma`. Dragging the same `.pkl` onto the live character runs this convert-and-install and plays the stem without restarting. A CLI install still needs the next config poll (or a restart) before the stem is a `motion_id`. Needs `numpy` and `node` (repo `three`).
+Writes `public/custom_motions/<stem>.vrma`. Dragging the same `.pkl` onto the live character runs this convert-and-install and plays the stem without restarting. Dragging a video (`.mp4` / `.mov`) uploads it to the WHAM HTTP service (`endpoints.wham_base_url`), then runs this converter at the video's frame rate; an unset URL leaves the video drop unimported. A CLI install still needs the next config poll (or a restart) before the stem is a `motion_id`. Needs `numpy` and `node` (repo `three`).
 
 ```bash
 python pkl2vrma/wham_to_vrma.py path/to/wham.pkl -o dance.vrma --fps 30

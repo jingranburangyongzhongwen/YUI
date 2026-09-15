@@ -26,6 +26,7 @@ const EMPTY: EndpointOverrides = {
   stt_base_url: "",
   tts_base_url: "",
   broker_base_url: "",
+  wham_base_url: "",
   chat_model: "",
   chat_model_context_window: "",
   chat_api: "",
@@ -440,6 +441,21 @@ describe("mergeEndpoints", () => {
     expect(out.broker_base_url).toBe("http://localhost:3201/mcp");
   });
 
+  it("applies a valid wham_base_url override", () => {
+    const out = mergeEndpoints(baseConfig(), {
+      ...EMPTY,
+      wham_base_url: "http://127.0.0.1:8767",
+    });
+    expect(out.wham_base_url).toBe("http://127.0.0.1:8767");
+  });
+
+  it("ignores an empty wham_base_url override (keeps base default)", () => {
+    const base = baseConfig();
+    base.wham_base_url = "http://127.0.0.1:8767";
+    const out = mergeEndpoints(base, { ...EMPTY, wham_base_url: "" });
+    expect(out.wham_base_url).toBe("http://127.0.0.1:8767");
+  });
+
   // ── chat_api override ──
 
   it("applies chat_api = 'chat_completions'", () => {
@@ -603,10 +619,10 @@ describe("ENDPOINT_FIELD_SPECS", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("assigns kind 'url' to the four base-url fields", () => {
+  it("assigns kind 'url' to the five base-url fields", () => {
     const urlKeys = ENDPOINT_FIELD_SPECS.filter((s) => s.kind === "url").map((s) => s.key);
     expect(urlKeys.sort()).toEqual(
-      ["chat_base_url", "stt_base_url", "tts_base_url", "broker_base_url"].sort(),
+      ["broker_base_url", "chat_base_url", "stt_base_url", "tts_base_url", "wham_base_url"].sort(),
     );
   });
 
@@ -651,6 +667,10 @@ describe("ENDPOINT_FIELD_SPECS — resetGroup (endpoints-section.ts per-service 
 
   it("broker reset group is broker_base_url only", () => {
     expect(bySvc("broker")).toEqual(["broker_base_url"]);
+  });
+
+  it("wham reset group is wham_base_url only", () => {
+    expect(bySvc("wham")).toEqual(["wham_base_url"]);
   });
 
   it("chat_model_context_window carries no resetGroup (no reset button clears it today)", () => {
@@ -706,6 +726,7 @@ describe("endpointDefaultsFromConfig", () => {
       stt_base_url: "http://localhost:5517",
       tts_base_url: "http://localhost:8092",
       broker_base_url: "",
+      wham_base_url: "",
       chat_model: "natsume",
       chat_model_context_window: "",
       chat_api: "",

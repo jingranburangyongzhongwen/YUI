@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import type { ExpressArgs } from "../contract";
+import type { ExpressArgs, MotionKind } from "../contract";
 import { createSpeechPlayback } from "./speech-playback";
 import type { TtsPipeline, TtsPipelineOptions } from "./tts-pipeline";
 
@@ -82,13 +82,14 @@ function multiPipelineFactory() {
   return { factory, instances };
 }
 
-function spyRenderer() {
+function spyRenderer(kind: MotionKind | null = null) {
   return {
     setMouthOpen: vi.fn<(mouthOpen: number) => void>(),
     stopMouth: vi.fn<() => void>(),
     easeEmotionToNeutral: vi.fn<(durationMs: number) => void>(),
     applyDirective: vi.fn(),
     playMotion: vi.fn(),
+    currentMotionKind: vi.fn(() => kind),
   };
 }
 
@@ -1155,6 +1156,24 @@ describe("createSpeechPlayback — holdMotion suppresses playMotion(null) for nu
 
     expect(renderer.easeEmotionToNeutral).toHaveBeenCalledWith(1000);
     expect(renderer.playMotion).toHaveBeenCalledWith(null);
+  });
+
+  it("null-cue onCuePlay does NOT call playMotion(null) while a oneshot is playing", () => {
+    const stub = stubPipelineFactory();
+    const renderer = spyRenderer("oneshot");
+    const surfaces = spySurfaces();
+    createSpeechPlayback({
+      renderer,
+      surfaces,
+      pipeline: NO_PIPELINE,
+      createPipeline: stub.factory,
+      isStrolling: () => false,
+    });
+
+    stub.emitCuePlay(null);
+
+    expect(renderer.easeEmotionToNeutral).toHaveBeenCalledWith(1000);
+    expect(renderer.playMotion).not.toHaveBeenCalled();
   });
 
   it("a cue-less cue during a stroll leaves the walk clip alone", () => {

@@ -22,7 +22,9 @@ import type { VoiceInputStatus } from "./ui/voice-input-status";
 type VoiceRenderer = Pick<
   Renderer,
   "setMouthOpen" | "stopMouth" | "easeEmotionToNeutral" | "applyDirective" | "playMotion"
->;
+> & {
+  currentMotionKind?(): ReturnType<Renderer["currentMotionKind"]>;
+};
 
 type VoiceSurfaces = Pick<Surfaces, "beginSpeech" | "pushSpeech" | "endSpeech" | "finishSpeech">;
 
@@ -201,12 +203,15 @@ export function wireVoicePipeline(deps: VoicePipelineDeps): VoicePipeline {
     thinkingTurnId = turnId;
     // hold BEFORE the first filler can speak so no filler sentence resets the motion.
     speechPlayback.holdMotion(true);
-    if (!deps.isStrolling()) deps.renderer.playMotion({ id: "thinking", loop: true });
+    if (!deps.isStrolling() && deps.renderer.currentMotionKind?.() !== "oneshot") {
+      deps.renderer.playMotion({ id: "thinking", loop: true });
+    }
     fillerLoop?.start();
   }
 
   function resumeThinking(): void {
     if (thinkingTurnId === null) return;
+    if (deps.renderer.currentMotionKind?.() === "oneshot") return;
     deps.renderer.playMotion({ id: "thinking", loop: true });
   }
 
@@ -216,7 +221,10 @@ export function wireVoicePipeline(deps: VoicePipelineDeps): VoicePipeline {
     speechPlayback.holdMotion(false);
     fillerLoop?.stop();
     // thinking is loop:true — without an explicit return to idle it spins forever and pollutes previousStable.
-    if (!deps.isStrolling()) deps.renderer.playMotion(null);
+    // A oneshot already in flight (dance, custom clip) plays to mixer finish.
+    if (!deps.isStrolling() && deps.renderer.currentMotionKind?.() !== "oneshot") {
+      deps.renderer.playMotion(null);
+    }
   }
 
   const turnOutput: TurnOutput = {

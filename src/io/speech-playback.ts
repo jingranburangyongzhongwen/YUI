@@ -13,7 +13,7 @@
  * interrupt() disposes the current pipeline and builds a new one, releasing any held bubble immediately (non-defer).
  */
 
-import type { ControlEnvelope, EmotionId, ExpressArgs } from "../contract";
+import type { ControlEnvelope, EmotionId, ExpressArgs, MotionKind } from "../contract";
 import { createEmojiStripper } from "./strip-emoji";
 import { createTtsPipeline, type TtsPipeline, type TtsPipelineOptions } from "./tts-pipeline";
 
@@ -27,6 +27,8 @@ interface PlaybackRenderer {
   easeEmotionToNeutral(durationMs?: number): void;
   applyDirective(env: ControlEnvelope): void;
   playMotion(motion: { id: string } | null): void;
+  /** Playing clip kind — a cue-less sentence must not cancel a oneshot already in flight. */
+  currentMotionKind?(): MotionKind | null;
 }
 
 interface PlaybackSurfaces {
@@ -63,7 +65,7 @@ export interface SpeechPlayback {
   /**
    * While held (true), null-cue applyCue suppresses playMotion(null) so an externally
    * started looping motion (e.g. thinking) is not reset by cue-less filler sentences.
-   * easeEmotionToNeutral still fires — only the motion reset is suppressed.
+   * A playing oneshot is left alone regardless. easeEmotionToNeutral still fires.
    */
   holdMotion(held: boolean): void;
   /** Interrupts an in-progress utterance: dispose/rebuild the pipeline + release the held bubble immediately. */
@@ -93,7 +95,13 @@ export function createSpeechPlayback(options: SpeechPlaybackOptions): SpeechPlay
       });
     } else {
       renderer.easeEmotionToNeutral(EMOTION_REVERT_MS);
-      if (!motionHeld && !options.isStrolling()) renderer.playMotion(null);
+      if (
+        !motionHeld &&
+        !options.isStrolling() &&
+        renderer.currentMotionKind?.() !== "oneshot"
+      ) {
+        renderer.playMotion(null);
+      }
     }
   }
 

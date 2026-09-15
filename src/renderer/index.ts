@@ -26,6 +26,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type {
   ControlEnvelope,
   EmotionRegistry,
+  MotionKind,
   MotionRegistry,
   MotionRegistryEntry,
 } from "../contract";
@@ -163,7 +164,8 @@ export interface Renderer {
   /**
    * Apply render directive per render contract.
    * emotion → setEmotion (only if present, otherwise hold/no-op), motion → playMotion
-   * (if absent or null, return to idle). Pure routing is handled by ./apply-directive routeDirective.
+   * (if present; explicit null returns to idle; absent holds the playing clip).
+   * Pure routing is handled by ./apply-directive routeDirective.
    */
   applyDirective(env: ControlEnvelope): void;
   /**
@@ -199,6 +201,8 @@ export interface Renderer {
   setLeaveSeatForOneshot(handler: ((motion: RenderMotionSignal) => boolean) | null): void;
   /** Currently committed motion (variant-resolved) — null before any playback. */
   getCurrentMotion(): { id: string; vrma_path: string } | null;
+  /** Kind of the committed motion — null before any playback. */
+  currentMotionKind(): MotionKind | null;
   /**
    * Merge one motion into the live registry without restarting the current clip.
    * Used to hot-play a just-installed custom clip before the next config poll.
@@ -1224,6 +1228,9 @@ export function createRenderer(options: RendererOptions): Renderer {
     getCurrentMotion() {
       const cur = controller?.current();
       return cur ? { id: cur.id, vrma_path: cur.vrma_path } : null;
+    },
+    currentMotionKind() {
+      return controller?.current()?.kind ?? null;
     },
     upsertMotion,
     setMotionRegistry,

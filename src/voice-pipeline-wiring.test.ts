@@ -154,7 +154,7 @@ function synthCalls(): unknown[][] {
   return mocks.fetchImpl.mock.calls.filter(([url]) => String(url).endsWith("/v1/audio/speech"));
 }
 
-function setup(over: { isStrolling?: () => boolean } = {}) {
+function setup(over: { isStrolling?: () => boolean; currentMotionKind?: () => "oneshot" | null } = {}) {
   let currentEndpoints = endpoints();
   let fillerConfig: FillerConfig = {
     gap_ms: 1_000,
@@ -180,6 +180,7 @@ function setup(over: { isStrolling?: () => boolean } = {}) {
     easeEmotionToNeutral: vi.fn(),
     applyDirective: vi.fn(),
     playMotion: vi.fn(),
+    currentMotionKind: vi.fn(over.currentMotionKind ?? (() => null)),
   };
   const surfaces = {
     beginSpeech: vi.fn(),
@@ -325,6 +326,16 @@ describe("wireVoicePipeline", () => {
     expect(mocks.fillerLoop.start).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves a playing oneshot alone when thinking starts, and still holds motion and starts the filler", () => {
+    const { voice, renderer } = setup({ currentMotionKind: () => "oneshot" });
+
+    voice.turnOutput.thinkingStart(1);
+
+    expect(mocks.speechPlayback.holdMotion).toHaveBeenCalledWith(true);
+    expect(renderer.playMotion).not.toHaveBeenCalled();
+    expect(mocks.fillerLoop.start).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves the body to a running stroll when thinking ends, and returns to idle once the stroll is gone", () => {
     let strolling = true;
     const { voice, renderer } = setup({ isStrolling: () => strolling });
@@ -339,6 +350,17 @@ describe("wireVoicePipeline", () => {
     renderer.playMotion.mockClear();
     voice.turnOutput.thinkingEnd(2);
     expect(renderer.playMotion).toHaveBeenCalledWith(null);
+  });
+
+  it("thinkingEnd does not cancel a playing oneshot", () => {
+    const { voice, renderer } = setup({ currentMotionKind: () => "oneshot" });
+
+    voice.turnOutput.thinkingStart(1);
+    renderer.playMotion.mockClear();
+    voice.turnOutput.thinkingEnd(1);
+
+    expect(mocks.speechPlayback.holdMotion).toHaveBeenCalledWith(false);
+    expect(renderer.playMotion).not.toHaveBeenCalled();
   });
 
   it("replays the thinking clip when the stroll ends while the turn is still thinking", () => {

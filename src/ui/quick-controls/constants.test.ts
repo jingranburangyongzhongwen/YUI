@@ -8,12 +8,13 @@ import { ENDPOINT_FIELD_SPECS } from "../../io/endpoints-settings";
 import { ENDPOINT_FIELDS } from "./constants";
 
 describe("ENDPOINT_FIELDS", () => {
-  it("lists exactly the 5 url/string-kind fields, in table order", () => {
+  it("lists exactly the 6 url/string-kind fields, in table order", () => {
     expect(ENDPOINT_FIELDS.map((f) => f.key)).toEqual([
       "chat_base_url",
       "stt_base_url",
       "tts_base_url",
       "broker_base_url",
+      "wham_base_url",
       "chat_model",
     ]);
   });

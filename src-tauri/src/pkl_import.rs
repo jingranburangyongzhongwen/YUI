@@ -71,7 +71,7 @@ pub(crate) fn dest_stem(src: &Path, reserved: &HashSet<String>, dest_dir: &Path)
     })
 }
 
-fn python_commands() -> &'static [(&'static str, &'static [&'static str])] {
+pub(crate) fn python_commands() -> &'static [(&'static str, &'static [&'static str])] {
     if cfg!(windows) {
         &[("py", &["-3"]), ("python", &[]), ("python3", &[])]
     } else {
@@ -91,7 +91,12 @@ fn subprocess_path(path: &Path) -> PathBuf {
     }
 }
 
-fn run_converter(script: &Path, pkl: &Path, dest: &Path) -> Result<(), String> {
+pub(crate) fn run_converter(
+    script: &Path,
+    pkl: &Path,
+    dest: &Path,
+    fps: Option<f64>,
+) -> Result<(), String> {
     let script = script
         .canonicalize()
         .map_err(|_| "pkl converter unavailable".to_string())?;
@@ -112,8 +117,11 @@ fn run_converter(script: &Path, pkl: &Path, dest: &Path) -> Result<(), String> {
             .arg(&script)
             .arg(&pkl)
             .arg("-o")
-            .arg(&dest)
-            .current_dir(&cwd);
+            .arg(&dest);
+        if let Some(fps) = fps {
+            cmd.arg("--fps").arg(format!("{fps}"));
+        }
+        cmd.current_dir(&cwd);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -157,14 +165,24 @@ fn import_pkl_at(
         .map_err(|_| "storage unavailable".to_string())?;
     let reserved: HashSet<String> = reserved_ids.iter().cloned().collect();
     let stem = dest_stem(&src, &reserved, &dest_dir);
+    write_vrma(&dest_dir, &stem, &src, script, None)
+}
+
+pub(crate) fn write_vrma(
+    dest_dir: &Path,
+    stem: &str,
+    pkl: &Path,
+    script: &Path,
+    fps: Option<f64>,
+) -> Result<ImportedPklMotion, String> {
     let dest = dest_dir.join(format!("{stem}.vrma"));
-    ensure_within(&dest_dir, &dest)?;
-    run_converter(script, &src, &dest)?;
+    ensure_within(dest_dir, &dest)?;
+    run_converter(script, pkl, &dest, fps)?;
     if !dest.is_file() {
         return Err("conversion failed".to_string());
     }
     Ok(ImportedPklMotion {
-        id: stem,
+        id: stem.to_string(),
         file_name: dest
             .file_name()
             .and_then(|n| n.to_str())
@@ -330,6 +348,29 @@ open(dest, "wb").write(b"glTF")
         assert_eq!(imported.id, "spin");
         assert_eq!(imported.file_name, "spin.vrma");
         assert!(dest_dir.join("spin.vrma").is_file());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn run_converter_passes_fps_flag() {
+        if !python_present() {
+            return;
+        }
+        let dir = unique_dir("fps");
+        let src = write_pkl(&dir, "clip.pkl");
+        let dest = dir.join("clip.vrma");
+        let script = dir.join("fake_convert.py");
+        fs::write(
+            &script,
+            r#"import sys
+dest = sys.argv[sys.argv.index("-o") + 1]
+fps = sys.argv[sys.argv.index("--fps") + 1]
+open(dest, "w").write(fps)
+"#,
+        )
+        .unwrap();
+        super::run_converter(&script, &src, &dest, Some(29.97)).unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap().trim(), "29.97");
         fs::remove_dir_all(&dir).ok();
     }
 

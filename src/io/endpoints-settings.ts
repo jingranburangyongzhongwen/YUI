@@ -24,6 +24,7 @@ export interface EndpointOverrides {
   stt_base_url: string;
   tts_base_url: string;
   broker_base_url: string;
+  wham_base_url: string;
   chat_model: string;
   chat_model_context_window: string;
   chat_api: string;
@@ -84,6 +85,12 @@ export const ENDPOINT_FIELD_SPECS = [
     kind: "url",
     labelKey: "endpoints.broker_base_url.label",
     resetGroup: "broker",
+  },
+  {
+    key: "wham_base_url",
+    kind: "url",
+    labelKey: "endpoints.wham_base_url.label",
+    resetGroup: "wham",
   },
   { key: "chat_model", kind: "string", labelKey: "endpoints.chat_model.label", resetGroup: "chat" },
   // No resetGroup: no reset button clears this today (the "chat" service reset only clears

@@ -94,11 +94,10 @@ pub(crate) fn drag_active(hook: bool, ole_cursor: bool, hold_remaining_ms: u64) 
     hook || ole_cursor || hold_remaining_ms > 0
 }
 
-pub(crate) fn paths_include_pkl(paths: &[String]) -> bool {
+pub(crate) fn paths_include_dance(paths: &[String]) -> bool {
     paths.iter().any(|path| {
-        std::path::Path::new(path)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("pkl"))
+        let p = std::path::Path::new(path);
+        crate::pkl_import::is_pkl_path(p) || crate::video_import::is_video_path(p)
     })
 }
 
@@ -206,7 +205,7 @@ pub(crate) fn next_hold_remaining_ms(
 
 #[cfg(target_os = "windows")]
 mod drop_target {
-    use super::{file_drop_payload, paths_include_pkl, FileDropPayload, FILE_DROP_CHANNEL};
+    use super::{file_drop_payload, paths_include_dance, FileDropPayload, FILE_DROP_CHANNEL};
     use std::cell::{Cell, RefCell};
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -357,7 +356,7 @@ mod drop_target {
             let paths = FileDropTarget::paths_from_data(obj);
             let valid = match &paths {
                 Some(p) if p.is_empty() => FileDropTarget::query_hdrop(obj),
-                Some(p) => paths_include_pkl(p),
+                Some(p) => paths_include_dance(p),
                 None => FileDropTarget::query_hdrop(obj),
             };
             self.enter_is_valid.set(valid);
@@ -820,7 +819,7 @@ mod tests {
     use super::{
         cursor_in_inflated_rect, cursor_in_rect, drag_active, drag_threshold_passed,
         file_drop_payload, image_name_is_explorer, is_file_drag_end, is_file_drag_pasteboard_type,
-        is_file_drag_start, is_shell_window_class, next_hold_remaining_ms, paths_include_pkl,
+        is_file_drag_start, is_shell_window_class, next_hold_remaining_ms, paths_include_dance,
         shell_file_drag, FILE_DRAG_ARM_MARGIN_PX, FILE_DRAG_HOLD_MS, FILE_DROP_CHANNEL,
     };
 
@@ -885,14 +884,14 @@ mod tests {
     }
 
     #[test]
-    fn paths_include_pkl_ignores_case_and_non_pkl() {
-        assert!(paths_include_pkl(&[r"C:\clips\Spin.PKL".into()]));
-        assert!(paths_include_pkl(&[
-            "/tmp/note.txt".into(),
-            "/tmp/a.pkl".into()
-        ]));
-        assert!(!paths_include_pkl(&["/tmp/clip.vrma".into()]));
-        assert!(!paths_include_pkl(&[]));
+    fn paths_include_dance_accepts_pkl_and_mp4_mov() {
+        assert!(paths_include_dance(&[r"C:\clips\Spin.PKL".into()]));
+        assert!(paths_include_dance(&["/tmp/note.txt".into(), "/tmp/a.pkl".into()]));
+        assert!(paths_include_dance(&["/tmp/clip.mp4".into()]));
+        assert!(paths_include_dance(&[r"C:\clips\Dance.MOV".into()]));
+        assert!(!paths_include_dance(&["/tmp/clip.webm".into()]));
+        assert!(!paths_include_dance(&["/tmp/clip.vrma".into()]));
+        assert!(!paths_include_dance(&[]));
     }
 
     #[test]

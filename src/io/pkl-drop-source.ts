@@ -10,7 +10,7 @@
 import type { MotionRegistryEntry } from "../contract";
 import type { EventBus } from "../dispatcher/event-bus";
 import { createLogger } from "../logger";
-import { importPklMotion } from "./pkl-import";
+import { importPklMotion, importVideoMotion } from "./pkl-import";
 import { isTauri } from "./tauri-env";
 
 const log = createLogger("pkl-drop-source");
@@ -28,9 +28,13 @@ export function isPklPath(path: string): boolean {
   return /\.pkl$/i.test(path.split(/[\\/]/).pop() ?? path);
 }
 
-export function firstPklPath(paths: readonly string[]): string | null {
+export function isVideoPath(path: string): boolean {
+  return /\.(mp4|mov)$/i.test(path.split(/[\\/]/).pop() ?? path);
+}
+
+export function firstDancePath(paths: readonly string[]): string | null {
   for (const path of paths) {
-    if (isPklPath(path)) return path;
+    if (isPklPath(path) || isVideoPath(path)) return path;
   }
   return null;
 }
@@ -78,6 +82,11 @@ export interface PklDropSourceDeps {
     srcPath: string,
     reservedIds: readonly string[],
   ) => Promise<{ id: string; entry: MotionRegistryEntry }>;
+  importVideo?: (
+    srcPath: string,
+    reservedIds: readonly string[],
+  ) => Promise<{ id: string; entry: MotionRegistryEntry }>;
+  getWhamUrl?: () => string;
   listenDragDrop?: (
     handler: (event: PklDragDropEvent) => void,
   ) => Promise<() => void> | (() => void);
@@ -189,7 +198,12 @@ async function defaultListenFileDrag(handler: (state: FileDragState) => void): P
 
 export function createPklDropSource(deps: PklDropSourceDeps): PklDropSource {
   const now = deps.now ?? Date.now;
+  const getWhamUrl = deps.getWhamUrl ?? (() => "");
   const importPkl = deps.importPkl ?? importPklMotion;
+  const importVideo =
+    deps.importVideo ??
+    ((srcPath: string, reservedIds: readonly string[]) =>
+      importVideoMotion(srcPath, reservedIds, { getWhamUrl }));
   const scaleFactor =
     deps.scaleFactor ?? (() => (typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1));
   const unlistens: Array<() => void> = [];
@@ -212,6 +226,14 @@ export function createPklDropSource(deps: PklDropSourceDeps): PklDropSource {
     deps.renderer.playMotion(motion);
   }
 
+  function importDropped(
+    srcPath: string,
+    reservedIds: readonly string[],
+  ): Promise<{ id: string; entry: MotionRegistryEntry }> {
+    if (isPklPath(srcPath)) return importPkl(srcPath, reservedIds);
+    return importVideo(srcPath, reservedIds);
+  }
+
   async function convert(srcPath: string): Promise<void> {
     converting = true;
     setHold(false);
@@ -225,7 +247,7 @@ export function createPklDropSource(deps: PklDropSourceDeps): PklDropSource {
       log.info("pkl_drop_converting");
     });
     try {
-      const { id, entry } = await importPkl(srcPath, deps.getReservedIds());
+      const { id, entry } = await importDropped(srcPath, deps.getReservedIds());
       cancelConvertPose();
       deps.renderer.upsertMotion(id, entry);
       deps.renderer.playMotion({ id });
@@ -269,7 +291,7 @@ export function createPklDropSource(deps: PklDropSourceDeps): PklDropSource {
       if (event.type !== "over") {
         log.debug("pkl_drop_event", {
           type: event.type,
-          pkl: event.type === "leave" ? false : !!firstPklPath(event.paths),
+          dance: event.type === "leave" ? false : !!firstDancePath(event.paths),
         });
       }
       if (event.type === "leave") {
@@ -281,9 +303,14 @@ export function createPklDropSource(deps: PklDropSourceDeps): PklDropSource {
       if (event.type === "enter" || event.type === "over") {
         return;
       }
-      const src = firstPklPath(event.paths);
+      const src = firstDancePath(event.paths);
       if (!src || !overCharacter(event.position)) {
-        log.debug("pkl_drop_ignored", { has_pkl: !!src });
+        log.debug("pkl_drop_ignored", { has_dance: !!src });
+        setHold(false);
+        return;
+      }
+      if (isVideoPath(src) && !getWhamUrl().trim()) {
+        log.debug("pkl_drop_ignored", { has_dance: true, wham: false });
         setHold(false);
         return;
       }

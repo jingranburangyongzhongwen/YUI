@@ -12,7 +12,13 @@ describe("configs/endpoints.json", () => {
   const ep = read("configs/endpoints.json");
 
   it("ships no service address — every URL is unconfigured until the user sets one", () => {
-    for (const key of ["chat_base_url", "stt_base_url", "tts_base_url", "broker_base_url"]) {
+    for (const key of [
+      "chat_base_url",
+      "stt_base_url",
+      "tts_base_url",
+      "broker_base_url",
+      "wham_base_url",
+    ]) {
       expect(ep, key).not.toHaveProperty(key);
     }
   });

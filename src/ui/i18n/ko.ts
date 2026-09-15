@@ -326,6 +326,7 @@ const ko: Record<string, string> = {
   "endpoints.stt_base_url.label": "음성 인식(STT) 서버 URL",
   "endpoints.tts_base_url.label": "음성 합성(TTS) 서버 URL",
   "endpoints.broker_base_url.label": "표현 브로커(Broker) URL",
+  "endpoints.wham_base_url.label": "WHAM 서버 URL",
   "endpoints.chat_model.label": "채팅 모델",
 
   // per-service sections (advanced tab)
@@ -346,10 +347,14 @@ const ko: Record<string, string> = {
   "svc.broker": "Broker",
   "svc.broker_hint": "MCP streamable-http",
   "svc.broker_type": "MCP streamable-http",
+  "svc.wham": "WHAM",
+  "svc.wham_hint": "영상 → 댄스",
+  "svc.wham_type": "WHAM HTTP",
   "svc.reset_chat": "채팅 되돌리기",
   "svc.reset_stt": "STT 되돌리기",
   "svc.reset_tts": "TTS 되돌리기",
   "svc.reset_broker": "Broker 되돌리기",
+  "svc.reset_wham": "WHAM 되돌리기",
 
   // chat API key
   "chatkey.section": "채팅 API 키",

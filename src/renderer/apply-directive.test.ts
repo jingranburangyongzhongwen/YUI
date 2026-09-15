@@ -4,7 +4,7 @@
  * These tests ARE the source of truth for the render rules + hold-on-null semantics that
  * applyDirective must obey when routing a ControlEnvelope into setEmotion / playMotion:
  *  - render rule 1: emotion present → expression transition; ABSENT → hold previous.
- *  - render rule 2: motion present → registry lookup + play; ABSENT or null → idle.
+ *  - render rule 2: motion present → play; ABSENT → hold previous; explicit null → idle.
  *  - hold-on-null: `emotion === null` OR absent → NO-OP (hold previous); only explicit
  *    `{id:"neutral"}` transitions to neutral. `setEmotion(null)` is itself a NO-OP hold.
  *  - render rule 6: `_reserved` is ignored in v0.
@@ -95,12 +95,10 @@ describe("routeDirective — motion channel", () => {
     expect(playMotion).toHaveBeenCalledWith(WAVE);
   });
 
-  it("motion ABSENT → return to idle: playMotion(null)", () => {
-    // §3 rule 2: absent → idle (active return, unlike emotion's passive hold).
+  it("motion ABSENT → hold previous: playMotion is NOT called", () => {
     const { playMotion, route } = makeHarness();
     route(env({ emotion: HAPPY }));
-    expect(playMotion).toHaveBeenCalledTimes(1);
-    expect(playMotion).toHaveBeenCalledWith(null);
+    expect(playMotion).not.toHaveBeenCalled();
   });
 
   it("motion explicitly null → return to idle: playMotion(null)", () => {
@@ -123,19 +121,18 @@ describe("routeDirective — combined", () => {
     expect(playMotion).toHaveBeenCalledWith(WAVE);
   });
 
-  it("neither present → hold expression (no setEmotion) + idle (playMotion null)", () => {
+  it("neither present → hold both channels (no setEmotion, no playMotion)", () => {
     const { setEmotion, playMotion, route } = makeHarness();
     route(env({}));
     expect(setEmotion).not.toHaveBeenCalled();
-    expect(playMotion).toHaveBeenCalledTimes(1);
-    expect(playMotion).toHaveBeenCalledWith(null);
+    expect(playMotion).not.toHaveBeenCalled();
   });
 
-  it("emotion only → setEmotion fires, motion returns to idle", () => {
+  it("emotion only → setEmotion fires, motion held", () => {
     const { setEmotion, playMotion, route } = makeHarness();
     route(env({ emotion: HAPPY }));
     expect(setEmotion).toHaveBeenCalledWith(HAPPY);
-    expect(playMotion).toHaveBeenCalledWith(null);
+    expect(playMotion).not.toHaveBeenCalled();
   });
 
   it("motion only → playMotion fires, expression held (no setEmotion)", () => {

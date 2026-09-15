@@ -178,7 +178,7 @@ schedule cue never carries it. A second `cue note:` line follows only when
 built-in touch and gesture cues (`touch_*`, `tap_bored`, `head_pat`, `drag_held`,
 `window_sit`, `peek`, `dropped`) send a label alone unless the user authored a `context`
 for them in `configs/avatar.json`, so most of those turns render just the headline.
-`pkl_dance` also sends `installed as motion_id <id>; now playing`. A
+`pkl_dance` also sends `installed as motion_id <id>; now playing`. The same cue fires after a dropped video finishes WHAM→VRMA install. A
 proactive turn with `idle_elapsed_min` but no cue at all (no configured label) falls back
 to a bare `trigger: proactive (user idle Xmin)`.
 
@@ -497,21 +497,21 @@ The last example loses the timing. Use separate cues when different parts of the
 
 ### Do expression cues persist across sentences?
 
-No. Call `generate_express` for every sentence that should have an expression cue.
+Face and voice: no. Call `generate_express` for every sentence that should have a face or voice cue. After speech, the face eases back to neutral.
 
-After the motion loop finishes, expression and motion return to neutral/idle. If multiple sentences should keep the same happy expression or motion, call `generate_express` again for each sentence.
+Body: a started oneshot (`dance`, a custom clip, `happy`, …) plays until that clip's mixer finish. A later sentence without `motion_id` does not cancel it. Call `generate_express` with a new `motion_id` to replace the body; omit `motion_id` to leave the playing clip alone. Do not re-send the same oneshot on every sentence — that restarts the clip.
 
 ### What happens when text is streamed without `generate_express`?
 
-The sentence is spoken normally with neutral voice tone and idle/neutral presentation.
+The sentence is spoken with neutral voice tone. The face eases toward neutral. A playing oneshot keeps playing until it finishes.
 
-Use no `generate_express` call when the sentence should stay neutral.
+Use no `generate_express` call when the sentence should stay neutral in face and voice.
 
 ### When should `generate_express` be called?
 
-Call it per sentence or per meaningful expressive beat.
+Call it per sentence or per meaningful expressive beat for face and voice.
 
-Use it when the sentence needs a face, body motion, or voice tone cue. If the next sentence should use the same cue, call it again for that sentence.
+Use it when the sentence needs a face, body motion, or voice tone cue. To keep the same face or voice on the next sentence, call it again. To keep a playing oneshot, omit `motion_id` on later sentences.
 
 ### What values are valid?
 

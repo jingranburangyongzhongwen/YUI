@@ -1,6 +1,7 @@
 /**
- * WHAM pkl → custom_motions install. Thin invoke wrapper over the native
- * `import_pkl_motion` command; registry row matches scripts/custom-motions.mjs.
+ * WHAM pkl/video → custom_motions install. Thin invoke wrappers over the native
+ * `import_pkl_motion` / `import_video_motion` commands; registry row matches
+ * scripts/custom-motions.mjs.
  */
 
 import type { MotionRegistryEntry } from "../contract";
@@ -13,6 +14,10 @@ export interface ImportedPklMotion {
 
 export interface PklImportDeps {
   invoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+export interface VideoImportDeps extends Partial<PklImportDeps> {
+  getWhamUrl: () => string;
 }
 
 async function defaultDeps(): Promise<PklImportDeps> {
@@ -41,6 +46,22 @@ export async function importPklMotion(
   const { id, fileName } = await d.invoke<ImportedPklMotion>("import_pkl_motion", {
     srcPath,
     reservedIds: [...reservedIds],
+  });
+  return { id, entry: customMotionEntry(fileName) };
+}
+
+export async function importVideoMotion(
+  srcPath: string,
+  reservedIds: readonly string[],
+  deps: VideoImportDeps,
+): Promise<{ id: string; entry: MotionRegistryEntry }> {
+  const baseUrl = deps.getWhamUrl().trim();
+  if (!baseUrl) throw new Error("wham not configured");
+  const invoke = deps.invoke ?? (await defaultDeps()).invoke;
+  const { id, fileName } = await invoke<ImportedPklMotion>("import_video_motion", {
+    srcPath,
+    reservedIds: [...reservedIds],
+    whamBaseUrl: baseUrl,
   });
   return { id, entry: customMotionEntry(fileName) };
 }

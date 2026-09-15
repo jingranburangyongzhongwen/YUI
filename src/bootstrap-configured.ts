@@ -483,6 +483,7 @@ const realFactories: ConfiguredBootstrapFactories = {
         surfaces,
         getReservedIds: () => Object.keys(config.get().motions),
         reloadConfig: () => config.reload(),
+        getWhamUrl: () => getEndpoints().wham_base_url ?? "",
         holdPointerCapture: (hold) => {
           if (hold) hitTest.suspend("capture", PKL_DROP_HIT_OWNER);
           else hitTest.resume(PKL_DROP_HIT_OWNER);

@@ -64,6 +64,23 @@ class TestWhamToVrma(unittest.TestCase):
             self.assertEqual(gltf["nodes"][bones["head"]["node"]]["name"], "Head")
             self.assertNotEqual(gltf["nodes"][bones["head"]["node"]]["name"], "ENDSITE")
 
+    def test_convert_fps_scales_clip_duration(self):
+        with tempfile.TemporaryDirectory() as td:
+            pkl = os.path.join(td, "clip.pkl")
+            synthetic_pkl(pkl, n=8)
+            slow = os.path.join(td, "slow.vrma")
+            fast = os.path.join(td, "fast.vrma")
+            convert(pkl, slow, fps=10.0, use_world=True)
+            convert(pkl, fast, fps=30.0, use_world=True)
+
+            def duration(path):
+                with open(path, "rb") as f:
+                    _, _, gltf = parse_glb(f.read())
+                acc = gltf["accessors"][gltf["animations"][0]["samplers"][0]["input"]]
+                return acc["max"][0]
+
+            self.assertAlmostEqual(duration(slow) / duration(fast), 3.0, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

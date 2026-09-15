@@ -5,7 +5,8 @@
  *  - Control signals (emotion_id/motion_id/emotion_text) arrive as arguments to the server-side
  *    `generate_express` tool-call (flat string arguments).
  *  - Speech text is not a tool-call but a separate assistant text stream (response.output_text.delta).
- *  - Both generate_express and emotion are optional — turns without them remain idle and retain the prior expression.
+ *  - Both generate_express and emotion are optional — a turn without them keeps the prior
+ *    expression; a playing oneshot keeps playing until mixer finish or a new motion_id.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -117,7 +118,7 @@ export type MotionRegistry = Record<string, MotionRegistryEntry>;
 export interface ExpressArgs {
   /** Emotion enum id. If absent, retain prior expression. Client normalizes to EmotionSignal{id}. */
   emotion_id?: string;
-  /** Motion registry key. If absent, client derives from emotion. Normalized to MotionSignal{id}. */
+  /** Motion registry key. If absent, leave the playing clip; a oneshot runs until mixer finish. Normalized to MotionSignal{id}. */
   motion_id?: string;
   /** TTS voice tag (example: "[whisper in small voice]") — free text. Normalized via emotion_text channel. */
   emotion_text?: string;
@@ -327,8 +328,8 @@ export interface ClientContext {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * configs/endpoints.json. The three base URLs (chat/stt/tts) are separate processes.
- * Every service address is optional: `""` means "not configured" — STT/TTS/broker stay off and a
+ * configs/endpoints.json. Chat/STT/TTS/WHAM are separate processes.
+ * Every service address is optional: `""` means "not configured" — STT/TTS/broker/WHAM stay off and a
  * chat turn fails with `not_configured` instead of reaching the network.
  */
 export interface EndpointsConfig {
@@ -372,6 +373,8 @@ export interface EndpointsConfig {
   tts_max_inflight?: number;
   /** Expression Broker MCP endpoint (streamable-http, example: `http://localhost:3201/mcp`). Skips vocab publish if not set. */
   broker_base_url?: string;
+  /** WHAM video→pkl HTTP origin. Unset / `""` = dropping a video does not import a dance. */
+  wham_base_url?: string;
   /** Maximum context token count for the active chat model. */
   chat_model_context_window?: number;
 }

@@ -73,6 +73,10 @@ export function validateEndpoints(file: string, raw: unknown): EndpointsConfig {
   if (!unset(raw.broker_base_url)) {
     broker_base_url = httpUrl("broker_base_url");
   }
+  let wham_base_url: string | undefined;
+  if (!unset(raw.wham_base_url)) {
+    wham_base_url = httpUrl("wham_base_url");
+  }
   // tts_max_inflight: optional, integer ≥ 1.
   const tts_max_inflight = raw.tts_max_inflight;
   if (
@@ -113,6 +117,7 @@ export function validateEndpoints(file: string, raw: unknown): EndpointsConfig {
     ...(tts_speaker !== undefined ? { tts_speaker } : {}),
     ...(typeof tts_max_inflight === "number" ? { tts_max_inflight } : {}),
     ...(broker_base_url ? { broker_base_url } : {}),
+    ...(wham_base_url ? { wham_base_url } : {}),
     ...(typeof chat_model_context_window === "number" ? { chat_model_context_window } : {}),
   };
 }
