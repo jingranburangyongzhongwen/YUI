@@ -1,21 +1,24 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { AvatarOption } from "../../config/load";
-import { createAgentNotifySettings } from "../../io/agent-notify-settings";
-import { createAgentSettings } from "../../io/agent-settings";
-import { createChatKeySettings } from "../../io/chat-key-settings";
-import { createEndpointsSettings } from "../../io/endpoints-settings";
-import { createGuardrailsSettings } from "../../io/guardrails-settings";
-import { createLipsyncSettings } from "../../io/lipsync-settings";
-import { createProactiveSettings } from "../../io/proactive-settings";
-import { createScheduleSettings } from "../../io/schedule-settings";
-import { createSessionDiagnosticsStore } from "../../io/session-diagnostics";
-import { createSessionStore } from "../../io/session-store";
-import { createPacerGapStore, createPresenceStore } from "../../io/settings-stores";
-import type { createSpeakerSelection, SpeakerOption } from "../../io/speaker-selection";
-import type { createVrmSelection } from "../../io/vrm-selection";
+import type { createVrmSelection } from "../../io/assets/vrm-selection";
+import { createSessionDiagnosticsStore } from "../../io/chat/session-diagnostics";
+import { createSessionStore } from "../../io/chat/session-store";
+import type {
+  createSpeakerSelection,
+  SpeakerOption,
+} from "../../io/voice/voices/speaker-selection";
+import { createLipsyncSettings } from "../../settings/avatar/lipsync-settings";
+import { createAgentNotifySettings } from "../../settings/backend/agent-notify-settings";
+import { createAgentSettings } from "../../settings/backend/agent-settings";
+import { createChatKeySettings } from "../../settings/backend/chat-key-settings";
+import { createEndpointsSettings } from "../../settings/backend/endpoints-settings";
+import { createGuardrailsSettings } from "../../settings/backend/guardrails-settings";
+import { createProactiveSettings } from "../../settings/cues/proactive-settings";
+import { createScheduleSettings } from "../../settings/cues/schedule-settings";
+import { createPacerGapStore, createPresenceStore } from "../../settings/settings-stores";
 import { getLocale, subscribe as i18nSubscribe, LOCALE_DISPLAY_NAMES, setLocale } from "../i18n";
-import { createQuickControls } from "../quick-controls";
+import { createQuickControls } from "./quick-controls";
 import {
   defaultQcArgs,
   inMemoryAgentStorage,
@@ -148,6 +151,43 @@ describe("createQuickControls — shell", () => {
     qc.dispose();
   });
 
+  // ── message button ────────────────────────────────────────────────────────
+
+  it("renders the header Message button only when onMessage is provided", () => {
+    const qc = buildQc({ onMessage: vi.fn() });
+    expect(qc.el.querySelector(".yui-quick__bar .yui-iconbtn--message")).not.toBeNull();
+    qc.dispose();
+
+    const without = buildQc();
+    expect(without.el.querySelector(".yui-iconbtn--message")).toBeNull();
+    without.dispose();
+  });
+
+  it("clicking the Message button closes the panel, then calls onMessage", () => {
+    let openWhenCalled: boolean | undefined;
+    const qc = buildQc({ onMessage: () => (openWhenCalled = qc.isOpen()) });
+    qc.open();
+
+    qc.el.querySelector<HTMLButtonElement>(".yui-iconbtn--message")!.click();
+
+    expect(openWhenCalled).toBe(false);
+    qc.dispose();
+  });
+
+  it("keeps the pop-out button as the first focus stop when onMessage is set", () => {
+    const qc = buildQc({ onMessage: vi.fn() });
+    qc.open();
+
+    expect(document.activeElement).toBe(qc.el.querySelector(".yui-iconbtn--popout"));
+    qc.dispose();
+  });
+
+  it("the window variant renders no Message button", () => {
+    const qc = buildQc({ variant: "window", onMessage: vi.fn() });
+    expect(qc.el.querySelector(".yui-iconbtn--message")).toBeNull();
+    qc.dispose();
+  });
+
   it("renders the Developer Tools row only when its opener is provided", () => {
     const onOpenDevtools = vi.fn();
     const qc = buildQc({ onOpenDevtools });
@@ -168,9 +208,7 @@ describe("createQuickControls — shell", () => {
     qc.open();
     expect(qc.isOpen()).toBe(true);
 
-    const closeBtn = qc.el.querySelector<HTMLButtonElement>(
-      ".yui-quick__bar-actions .yui-iconbtn:not(.yui-iconbtn--popout)",
-    )!;
+    const closeBtn = qc.el.querySelector<HTMLButtonElement>(".yui-iconbtn--close")!;
     closeBtn.click();
 
     expect(qc.isOpen()).toBe(false);

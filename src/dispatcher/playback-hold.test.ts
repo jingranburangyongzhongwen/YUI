@@ -9,14 +9,15 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ATTACHMENT_LIMITS_DEFAULTS, type PeekConfig, type TapConfig } from "../config/load";
-import type { AudioSink } from "../io/audio-player";
-import { createSpeechPlayback, type SpeechPlayback } from "../io/speech-playback";
-import type { TtsSynth } from "../io/tts-synth";
-import { createBackendCaller } from "./backend-caller";
+import type { PeekConfig, TapConfig } from "../config/load";
+import { guardrailsFixture } from "../config/load-test-helpers";
+import type { AudioSink } from "../io/voice/tts/audio-player";
+import { createSpeechPlayback, type SpeechPlayback } from "../io/voice/tts/speech-playback";
+import type { TtsSynth } from "../io/voice/tts/tts-synth";
+import { createBackendCaller } from "./backend/backend-caller";
+import { type BusEnvelope, createEventBus, type EventBus } from "./core/event-bus";
+import { createGuardrails, type Guardrails, type GuardrailsConfig } from "./core/guardrails";
 import { createDispatcher, type Dispatcher } from "./dispatcher";
-import { type BusEnvelope, createEventBus, type EventBus } from "./event-bus";
-import { createGuardrails, type Guardrails, type GuardrailsConfig } from "./guardrails";
 import {
   CONFIG,
   completedEvent,
@@ -25,7 +26,7 @@ import {
   makeLogger,
   userEnv,
 } from "./test-helpers";
-import { createTurnLog, type TurnLog } from "./turn";
+import { createTurnLog, type TurnLog } from "./turn/turn";
 
 const NOW = 1_717_000_000_000;
 
@@ -33,9 +34,7 @@ const NOW = 1_717_000_000_000;
 function permissiveGuardrailsConfig(): GuardrailsConfig {
   return {
     debounce_ms: {
-      idle_watcher: 0,
       os_event_watcher: 0,
-      backend_push_source: 0,
       user_input_source: 0,
       screen_watcher: 5000,
     },
@@ -46,7 +45,7 @@ function permissiveGuardrailsConfig(): GuardrailsConfig {
       overall_max: 1000,
       cooldown_ms: 300_000,
     },
-    attachments: ATTACHMENT_LIMITS_DEFAULTS,
+    attachments: guardrailsFixture().attachments,
   };
 }
 
@@ -176,8 +175,13 @@ describe("dispatcher — turn admission across the amplitude flag (#512)", () =>
         end: () => speechPlayback.onSpeechEnd(),
         abort: () => speechPlayback.abort(),
         cue: () => {},
+        cueWithSpeech: () => {},
+        silentCue: (args) => speechPlayback.silentCue(args),
         toolStatus: () => {},
         activity: () => {},
+        releaseMute: () => speechPlayback.releaseMute(),
+        hasOutstandingSpeech: () => speechPlayback.hasOutstandingSpeech(),
+        onQueueDrained: (callback) => speechPlayback.onQueueDrained(callback),
       },
       logger: makeLogger(),
     });
@@ -196,6 +200,7 @@ describe("dispatcher — turn admission across the amplitude flag (#512)", () =>
       backendCaller,
       guardrails,
       turnLog,
+      hasOutstandingSpeech: () => speechPlayback.hasOutstandingSpeech(),
       logger: makeLogger(),
     });
   });
@@ -209,7 +214,7 @@ describe("dispatcher — turn admission across the amplitude flag (#512)", () =>
     await vi.advanceTimersByTimeAsync(20);
     // Stream reached completed → pipeline.end() queued a boundary, but synth hasn't resolved yet.
     expect(script.spy.mock.calls.length).toBe(1);
-    expect(turnLog.isAudioOwed()).toBe(true);
+    expect(speechPlayback.hasOutstandingSpeech()).toBe(true);
     // The window this test guards: stream done, audio owed, but no frame has played yet —
     // this is precisely why the old amplitude flag read false.
     expect(played).toHaveLength(0);

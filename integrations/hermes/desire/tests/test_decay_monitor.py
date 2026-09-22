@@ -1,3 +1,4 @@
+import json
 import re
 import socket
 import threading
@@ -5,9 +6,13 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from conftest import AGENT_NAME, PROFILE_NAME
 
 import decay_monitor
 import desire_state
+
+BRANCH = f"{AGENT_NAME}/"
+MARKER = f"<!-- from-{AGENT_NAME} -->"
 
 
 def without_day(summary: str) -> str:
@@ -19,11 +24,22 @@ def without_starved(summary: str) -> str:
 
 
 def test_monitor_wrapper_is_self_locating_for_symlink_installation():
-    wrapper = Path(__file__).parents[1] / "scripts/natsume-desire-monitor.sh"
+    wrapper = Path(__file__).parents[1] / "scripts/desire-monitor.sh"
     assert wrapper.read_text(encoding="utf-8").splitlines() == [
         "#!/bin/sh",
         'exec python3 "$(dirname "$(readlink -f "$0")")/../decay_monitor.py"',
     ]
+
+
+@pytest.mark.parametrize("missing", ["DESIRE_AGENT_NAME", "HERMES_PROFILE"])
+def test_monitor_refuses_to_run_without_its_identity(state_dir, monkeypatch, capsys, missing):
+    monkeypatch.delenv(missing, raising=False)
+
+    with pytest.raises(SystemExit) as failure:
+        decay_monitor.main()
+
+    assert missing in str(failure.value)
+    assert capsys.readouterr().out == ""
 
 
 def test_bootstrap_stdout_is_golden_and_has_one_newline(state_dir, at):
@@ -240,6 +256,7 @@ def test_satisfying_a_saturated_drive_clears_its_saturation(state_dir, at, state
     assert read_json(state_dir / "drives.json")["curiosity"]["level"] == 70.0
     assert decay_monitor.run(later).endswith(" starved:0/0/0\n")
     assert read_json(state_dir / "monitor.json")["saturated_since"]["curiosity"] is None
+    assert read_json(state_dir / "artefacts.json")["learned"] == ["read the paper"]
 
 
 def test_one_drive_leaving_the_ceiling_cannot_hide_another_crossing(state_dir, at, state_helpers):
@@ -853,3 +870,640 @@ def test_fallback_summary_wakes_the_tick_on_a_new_wake_day(monkeypatch, capsys, 
     assert first.endswith(" day:2026-08-25 rises:0 starved:0/0/0\n")
     assert second.endswith(" day:2026-08-26 rises:0 starved:0/0/0\n")
     assert first != second
+
+
+def git_repo(workspace: Path, name: str, origin: str | None) -> Path:
+    """Create a workspace directory, optionally with a git origin remote."""
+
+    path = workspace / name
+    (path / ".git").mkdir(parents=True)
+    if origin is not None:
+        (path / ".git" / "config").write_text(
+            '[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n'
+            f"\turl = {origin}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+            encoding="utf-8",
+        )
+    return path
+
+
+def skill(skills_root: Path, relative: str) -> Path:
+    path = skills_root / relative
+    path.mkdir(parents=True)
+    (path / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+    return path
+
+
+def gh_runner(payloads: dict, failing: tuple = (), views: dict | None = None):
+    """Answer `gh <kind> list` from a `(command, repo)` table and `gh <kind> view` from a url table."""
+
+    def run(args: list[str]) -> str:
+        command = args[0]
+        if args[1] == "view":
+            url = args[2]
+            if url in failing:
+                raise RuntimeError("gh: HTTP 404")
+            return json.dumps((views or {}).get(url, {}))
+        repo = args[args.index("--repo") + 1]
+        if command in failing or (command, repo) in failing:
+            raise RuntimeError("gh: HTTP 404")
+        return json.dumps(payloads.get((command, repo), []))
+
+    return run
+
+
+def audited(state_dir: Path, event: str) -> list[dict]:
+    values = [json.loads(line) for line in (state_dir / "audit.jsonl").read_text().splitlines() if line]
+    return [value for value in values if value["event"] == event]
+
+
+def satisfied(state_dir: Path) -> list[dict]:
+    return audited(state_dir, "drive_satisfied")
+
+
+def derive(
+    state_dir,
+    now,
+    tmp_path,
+    *,
+    payloads=None,
+    failing=(),
+    skills=(),
+    views=None,
+):
+    """Run one derivation over a workspace holding `owner/YUI` and the named skills."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    if not (workspace / "YUI").exists():
+        git_repo(workspace, "YUI", "https://github.com/owner/YUI.git")
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir(exist_ok=True)
+    for relative in skills:
+        if not (skills_root / relative).exists():
+            skill(skills_root, relative)
+    return tick(
+        state_dir,
+        now,
+        workspace_root=workspace,
+        skills_root=skills_root,
+        run_gh=gh_runner(payloads or {}, failing, views),
+    )
+
+
+def tick(state_dir, now, **sources):
+    """Run both derivation phases the way the monitor does."""
+
+    observed = decay_monitor.collect_artefacts(state_dir, now, **sources)
+    decay_monitor.score_artefacts(state_dir, now, observed)
+    return observed
+
+
+def test_workspace_repos_reads_github_origins_only(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    git_repo(workspace, "YUI", "https://github.com/owner/YUI.git")
+    git_repo(workspace, "memory_layer", "git@github.com:owner/memory_layer.git")
+    git_repo(workspace, "internal", "https://gitlab.example.com/team/internal.git")
+    git_repo(workspace, "no-remote", None)
+    (workspace / "cron_results").mkdir()
+    (workspace / "notes.md").write_text("loose file", encoding="utf-8")
+
+    assert decay_monitor.workspace_repos(workspace) == ["owner/YUI", "owner/memory_layer"]
+
+
+def test_workspace_repos_tolerates_a_missing_workspace(tmp_path):
+    assert decay_monitor.workspace_repos(tmp_path / "absent") == []
+
+
+def test_bootstrap_marks_every_artefact_seen_without_dosing(state_dir, at, tmp_path, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+
+    derive(
+        state_dir,
+        now,
+        tmp_path,
+        payloads={
+            ("pr", "owner/YUI"): [
+                {"url": "https://github.com/owner/YUI/pull/1", "headRefName": f"{BRANCH}a", "mergedAt": None},
+                {
+                    "url": "https://github.com/owner/YUI/pull/2",
+                    "headRefName": f"{BRANCH}b",
+                    "mergedAt": "2026-08-24T00:00:00Z",
+                },
+            ],
+            ("issue", "owner/YUI"): [
+                {
+                    "url": "https://github.com/owner/YUI/issues/9",
+                    "body": f"{MARKER}\nhello",
+                    "closedAt": None,
+                }
+            ],
+        },
+        skills=("mcp/first", "second"),
+    )
+
+    artefacts = read_json(state_dir / "artefacts.json")
+    assert artefacts["bootstrapped_at"] == now.isoformat()
+    assert artefacts["seen"]["pr"] == [
+        "https://github.com/owner/YUI/pull/1",
+        "https://github.com/owner/YUI/pull/2",
+    ]
+    assert artefacts["seen"]["issue"] == ["https://github.com/owner/YUI/issues/9"]
+    assert artefacts["seen"]["skill"] == ["mcp/first", "second"]
+    assert artefacts["shipped"] == ["https://github.com/owner/YUI/pull/2"]
+    assert artefacts["unreported"] == []
+    assert satisfied(state_dir) == []
+
+
+def test_second_run_doses_a_new_agent_pull_request_exactly_once(state_dir, at, tmp_path, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+
+    payloads = {
+        ("pr", "owner/YUI"): [
+            {"url": "https://github.com/owner/YUI/pull/3", "headRefName": f"{BRANCH}c", "mergedAt": None}
+        ]
+    }
+    derive(state_dir, now, tmp_path, payloads=payloads)
+    derive(state_dir, now, tmp_path, payloads=payloads)
+
+    assert [(event["event_type"], event["kind"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", "pr", "https://github.com/owner/YUI/pull/3")
+    ]
+    artefacts = read_json(state_dir / "artefacts.json")
+    assert artefacts["seen"]["pr"] == ["https://github.com/owner/YUI/pull/3"]
+    assert artefacts["unreported"] == [
+        {
+            "event": "progressed",
+            "kind": "pr",
+            "ref": "https://github.com/owner/YUI/pull/3",
+            "at": now.isoformat(),
+        }
+    ]
+
+
+def test_merged_pull_request_doses_shipped_exactly_once(state_dir, at, tmp_path):
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+    open_pull = {
+        "url": "https://github.com/owner/YUI/pull/4",
+        "headRefName": f"{BRANCH}d",
+        "mergedAt": None,
+    }
+    derive(state_dir, now, tmp_path, payloads={("pr", "owner/YUI"): [open_pull]})
+
+    merged = {**open_pull, "mergedAt": "2026-08-25T11:00:00Z"}
+    derive(state_dir, now, tmp_path, payloads={("pr", "owner/YUI"): [merged]})
+    derive(state_dir, now, tmp_path, payloads={("pr", "owner/YUI"): [merged]})
+
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", "https://github.com/owner/YUI/pull/4"),
+        ("shipped", "https://github.com/owner/YUI/pull/4"),
+    ]
+
+
+def test_pull_request_outside_the_agent_branch_prefix_is_never_scored(state_dir, at, tmp_path):
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+
+    derive(
+        state_dir,
+        now,
+        tmp_path,
+        payloads={
+            ("pr", "owner/YUI"): [
+                {
+                    "url": "https://github.com/owner/YUI/pull/5",
+                    "headRefName": "feat/other",
+                    "mergedAt": "2026-08-25T11:00:00Z",
+                }
+            ]
+        },
+    )
+
+    assert satisfied(state_dir) == []
+
+
+def test_issue_without_the_marker_is_never_scored(state_dir, at, tmp_path, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+
+    derive(
+        state_dir,
+        now,
+        tmp_path,
+        payloads={
+            ("issue", "owner/YUI"): [
+                {"url": "https://github.com/owner/YUI/issues/10", "body": "plain body", "closedAt": None},
+                {
+                    "url": "https://github.com/owner/YUI/issues/11",
+                    "body": f"{MARKER}\nmarked",
+                    "closedAt": "2026-08-25T10:00:00Z",
+                },
+            ]
+        },
+    )
+
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", "https://github.com/owner/YUI/issues/11"),
+        ("shipped", "https://github.com/owner/YUI/issues/11"),
+    ]
+    assert read_json(state_dir / "artefacts.json")["seen"]["issue"] == [
+        "https://github.com/owner/YUI/issues/11"
+    ]
+
+
+def test_new_skill_directory_doses_progressed_on_first_sight(state_dir, at, tmp_path):
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path, skills=("mcp/old",))
+
+    derive(state_dir, now, tmp_path, skills=("mcp/old", "devops/new"))
+    derive(state_dir, now, tmp_path, skills=("mcp/old", "devops/new"))
+
+    assert [(event["event_type"], event["kind"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", "skill", "devops/new")
+    ]
+
+
+def test_only_a_skill_seen_after_bootstrap_records_its_first_sight(state_dir, at, tmp_path, state_helpers):
+    _, _, read_json, _ = state_helpers
+    bootstrapped = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(bootstrapped)
+    derive(state_dir, bootstrapped, tmp_path, skills=("mcp/old",))
+    assert read_json(state_dir / "artefacts.json")["skill_first_seen"] == {}
+
+    later = at("2026-08-26T12:00:00+09:00")
+    derive(state_dir, later, tmp_path, skills=("mcp/old", "devops/new"))
+    derive(state_dir, at("2026-08-27T12:00:00+09:00"), tmp_path, skills=("mcp/old", "devops/new"))
+
+    assert read_json(state_dir / "artefacts.json")["skill_first_seen"] == {"devops/new": later.isoformat()}
+
+
+def test_a_capped_skill_still_records_its_first_sight(state_dir, at, tmp_path, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+    for index in range(desire_state.EVENT_DAILY_CAPS["progressed"]):
+        desire_state.satisfy("progressed", f"filler {index}", now)
+
+    derive(state_dir, now, tmp_path, skills=("mcp/capped",))
+
+    assert read_json(state_dir / "artefacts.json")["skill_first_seen"] == {"mcp/capped": now.isoformat()}
+
+
+def test_event_past_its_daily_cap_is_still_marked_seen_and_audits_satisfy_blocked(
+    state_dir, at, tmp_path, state_helpers
+):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+    for index in range(desire_state.EVENT_DAILY_CAPS["progressed"]):
+        desire_state.satisfy("progressed", f"filler {index}", now)
+
+    derive(state_dir, now, tmp_path, skills=("mcp/capped",))
+
+    blocked = audited(state_dir, "satisfy_blocked")
+    assert [(event["event_type"], event["ref"], event["kind"]) for event in blocked] == [
+        ("progressed", "mcp/capped", "skill")
+    ]
+    artefacts = read_json(state_dir / "artefacts.json")
+    assert artefacts["seen"]["skill"] == ["mcp/capped"]
+    assert artefacts["unreported"] == []
+
+
+def test_a_learned_reported_while_the_tick_scores_survives_the_artefact_write(
+    state_dir, at, tmp_path, state_helpers, monkeypatch
+):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+    source = "https://github.com/owner/YUI/commit/abc"
+    scoring = desire_state.satisfy
+
+    def report_while_scoring(event, ref, when, **named):
+        reward = scoring(event, ref, when, **named)
+        if event == "progressed":
+            scoring("learned", source, when)
+        return reward
+
+    monkeypatch.setattr(desire_state, "satisfy", report_while_scoring)
+
+    derive(state_dir, now, tmp_path, skills=("mcp/new",))
+
+    assert read_json(state_dir / "artefacts.json")["learned"] == [source]
+
+
+def test_failing_source_audits_derive_failed_and_leaves_its_cursor(state_dir, at, tmp_path, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+
+    derive(
+        state_dir,
+        now,
+        tmp_path,
+        payloads={
+            ("pr", "owner/YUI"): [
+                {"url": "https://github.com/owner/YUI/pull/6", "headRefName": f"{BRANCH}e", "mergedAt": None}
+            ]
+        },
+        failing=("issue",),
+    )
+
+    failures = audited(state_dir, "derive_failed")
+    assert [(event["source"], event["repo"]) for event in failures] == [("issue", "owner/YUI")]
+    assert "404" in failures[0]["error"]
+    artefacts = read_json(state_dir / "artefacts.json")
+    assert artefacts["seen"]["issue"] == []
+    assert artefacts["seen"]["pr"] == ["https://github.com/owner/YUI/pull/6"]
+
+
+def test_a_source_that_failed_during_bootstrap_bootstraps_when_it_recovers(
+    state_dir, at, tmp_path, state_helpers
+):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    existing = {
+        "url": "https://github.com/owner/YUI/pull/1",
+        "headRefName": f"{BRANCH}a",
+        "mergedAt": "2026-08-24T00:00:00Z",
+    }
+    payloads = {("pr", "owner/YUI"): [existing]}
+
+    derive(state_dir, now, tmp_path, payloads=payloads, failing=("pr",))
+
+    assert satisfied(state_dir) == []
+    assert read_json(state_dir / "artefacts.json")["seen"]["pr"] == []
+
+    derive(state_dir, now, tmp_path, payloads=payloads)
+
+    assert satisfied(state_dir) == []
+    artefacts = read_json(state_dir / "artefacts.json")
+    assert artefacts["seen"]["pr"] == [existing["url"]]
+    assert artefacts["shipped"] == [existing["url"]]
+
+    fresh = {"url": "https://github.com/owner/YUI/pull/2", "headRefName": f"{BRANCH}b", "mergedAt": None}
+    derive(state_dir, now, tmp_path, payloads={("pr", "owner/YUI"): [existing, fresh]})
+
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", fresh["url"])
+    ]
+
+
+def test_monitor_run_scores_a_new_skill_into_unreported(state_dir, at, isolated_profile, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    skills_root = isolated_profile / ".hermes" / "profiles" / PROFILE_NAME / "skills"
+    skill(skills_root, "mcp/known")
+
+    decay_monitor.run(now)
+    skill(skills_root, "devops/new")
+    output = decay_monitor.run(now)
+
+    assert output.endswith(" rises:0 starved:0/0/0\n")
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", "devops/new")
+    ]
+    assert read_json(state_dir / "artefacts.json")["unreported"] == [
+        {"event": "progressed", "kind": "skill", "ref": "devops/new", "at": now.isoformat()}
+    ]
+
+
+def two_repo_workspace(tmp_path, second_origin: str) -> Path:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    git_repo(workspace, "YUI", "https://github.com/owner/YUI.git")
+    git_repo(workspace, "YUI-clone", second_origin)
+    return workspace
+
+
+def two_repo_tick(state_dir, now, workspace, tmp_path, payloads, failing=()):
+    return tick(
+        state_dir,
+        now,
+        workspace_root=workspace,
+        skills_root=tmp_path / "skills",
+        run_gh=gh_runner(payloads, failing),
+    )
+
+
+def test_two_workspace_directories_sharing_an_origin_dose_once(state_dir, at, tmp_path, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    workspace = two_repo_workspace(tmp_path, "https://github.com/owner/YUI.git")
+    two_repo_tick(state_dir, now, workspace, tmp_path, {})
+    payloads = {
+        ("pr", "owner/YUI"): [
+            {"url": "https://github.com/owner/YUI/pull/7", "headRefName": f"{BRANCH}f", "mergedAt": None}
+        ]
+    }
+
+    two_repo_tick(state_dir, now, workspace, tmp_path, payloads)
+
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", "https://github.com/owner/YUI/pull/7")
+    ]
+    artefacts = read_json(state_dir / "artefacts.json")
+    assert artefacts["seen"]["pr"] == ["https://github.com/owner/YUI/pull/7"]
+    assert read_json(state_dir / "budget.json")["events"] == {"progressed": 1}
+
+
+def test_a_repository_failing_during_bootstrap_leaves_the_kind_unbootstrapped(
+    state_dir, at, tmp_path, state_helpers
+):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    workspace = two_repo_workspace(tmp_path, "https://github.com/owner/memory_layer.git")
+    healthy = {"url": "https://github.com/owner/YUI/pull/8", "headRefName": f"{BRANCH}g", "mergedAt": None}
+
+    two_repo_tick(
+        state_dir,
+        now,
+        workspace,
+        tmp_path,
+        {("pr", "owner/YUI"): [healthy]},
+        failing=(("pr", "owner/memory_layer"),),
+    )
+
+    artefacts = read_json(state_dir / "artefacts.json")
+    assert artefacts["seen"]["pr"] == []
+    assert "pr" not in artefacts["bootstrapped"]
+    assert "issue" in artefacts["bootstrapped"]
+    assert satisfied(state_dir) == []
+
+
+def test_a_repository_failing_after_bootstrap_still_scores_the_healthy_one(
+    state_dir, at, tmp_path, state_helpers
+):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    workspace = two_repo_workspace(tmp_path, "https://github.com/owner/memory_layer.git")
+    two_repo_tick(state_dir, now, workspace, tmp_path, {})
+    healthy = {"url": "https://github.com/owner/YUI/pull/9", "headRefName": f"{BRANCH}h", "mergedAt": None}
+
+    two_repo_tick(
+        state_dir,
+        now,
+        workspace,
+        tmp_path,
+        {("pr", "owner/YUI"): [healthy]},
+        failing=(("pr", "owner/memory_layer"),),
+    )
+
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", healthy["url"])
+    ]
+    assert [(event["source"], event["repo"]) for event in audited(state_dir, "derive_failed")] == [
+        ("pr", "owner/memory_layer")
+    ]
+    assert read_json(state_dir / "artefacts.json")["seen"]["pr"] == [healthy["url"]]
+
+
+def test_a_merged_pull_request_outside_the_list_window_is_shipped_from_its_own_view(state_dir, at, tmp_path):
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    url = "https://github.com/owner/YUI/pull/10"
+    listed = {"url": url, "headRefName": f"{BRANCH}i", "mergedAt": None}
+    derive(state_dir, now, tmp_path)
+    derive(state_dir, now, tmp_path, payloads={("pr", "owner/YUI"): [listed]})
+
+    derive(state_dir, now, tmp_path, views={url: {"state": "MERGED", "mergedAt": "2026-08-25T11:00:00Z"}})
+    derive(state_dir, now, tmp_path, views={url: {"state": "MERGED", "mergedAt": "2026-08-25T11:00:00Z"}})
+
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", url),
+        ("shipped", url),
+    ]
+
+
+def test_a_closed_issue_outside_the_list_window_is_shipped_from_its_own_view(state_dir, at, tmp_path):
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    url = "https://github.com/owner/YUI/issues/12"
+    listed = {"url": url, "body": f"{MARKER}\nhi", "closedAt": None}
+    derive(state_dir, now, tmp_path)
+    derive(state_dir, now, tmp_path, payloads={("issue", "owner/YUI"): [listed]})
+
+    derive(state_dir, now, tmp_path, views={url: {"state": "CLOSED", "closedAt": "2026-08-25T11:00:00Z"}})
+
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", url),
+        ("shipped", url),
+    ]
+
+
+def test_a_failing_view_call_audits_that_artefact_and_leaves_it_for_the_next_tick(
+    state_dir, at, tmp_path, state_helpers
+):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    url = "https://github.com/owner/YUI/pull/11"
+    listed = {"url": url, "headRefName": f"{BRANCH}j", "mergedAt": None}
+    derive(state_dir, now, tmp_path)
+    derive(state_dir, now, tmp_path, payloads={("pr", "owner/YUI"): [listed]})
+
+    derive(state_dir, now, tmp_path, failing=(url,))
+
+    failures = audited(state_dir, "derive_failed")
+    assert [(event["source"], event["ref"]) for event in failures] == [("pr", url)]
+    assert read_json(state_dir / "artefacts.json")["shipped"] == []
+
+    derive(state_dir, now, tmp_path, views={url: {"state": "MERGED", "mergedAt": "2026-08-25T11:00:00Z"}})
+
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [
+        ("progressed", url),
+        ("shipped", url),
+    ]
+
+
+def test_a_malformed_ref_audits_derive_failed_instead_of_vanishing(state_dir, at, tmp_path):
+    now = at("2026-08-25T12:00:00+09:00")
+    desire_state.bootstrap(now)
+    derive(state_dir, now, tmp_path)
+    url = "https://github.com/owner/YUI/pull/3"
+
+    derive(
+        state_dir,
+        now,
+        tmp_path,
+        payloads={
+            ("pr", "owner/YUI"): [
+                {"url": 12, "headRefName": f"{BRANCH}broken", "mergedAt": None},
+                {"url": url, "headRefName": f"{BRANCH}good", "mergedAt": None},
+            ]
+        },
+    )
+
+    failures = audited(state_dir, "derive_failed")
+    assert [event["source"] for event in failures] == ["pr"]
+    assert "12" in failures[0]["error"]
+    assert [(event["event_type"], event["ref"]) for event in satisfied(state_dir)] == [("progressed", url)]
+
+
+def test_sources_are_read_before_the_tick_takes_the_state_lock(state_dir, at, isolated_profile, monkeypatch):
+    now = at("2026-08-25T12:00:00+09:00")
+    workspace = isolated_profile / ".hermes" / "profiles" / PROFILE_NAME / "workspace"
+    workspace.mkdir(parents=True)
+    git_repo(workspace, "YUI", "https://github.com/owner/YUI.git")
+    acquired = []
+
+    def probe_lock(args):
+        def take():
+            with desire_state.state_lock(state_dir):
+                acquired.append(args[0])
+
+        worker = threading.Thread(target=take, daemon=True)
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "the tick held the state lock while reading a source"
+        return "[]"
+
+    monkeypatch.setattr(decay_monitor, "run_gh", probe_lock)
+
+    decay_monitor.run(now)
+
+    assert acquired == ["pr", "issue"]
+
+
+def test_monitor_run_derives_from_the_profile_and_prints_the_summary_when_a_source_fails(
+    state_dir, at, isolated_profile, monkeypatch, state_helpers
+):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    profile = isolated_profile / ".hermes" / "profiles" / PROFILE_NAME
+    workspace = profile / "workspace"
+    workspace.mkdir(parents=True)
+    git_repo(workspace, "YUI", "https://github.com/owner/YUI.git")
+    skill(profile / "skills", "mcp/known")
+
+    def failing_gh(args):
+        raise RuntimeError("gh: could not authenticate")
+
+    monkeypatch.setattr(decay_monitor, "run_gh", failing_gh)
+
+    output = decay_monitor.run(now)
+
+    assert output == (
+        "social:low curiosity:mid accomplishment:mid outbox:0 transport:down "
+        "budget:3/3sig 2/2iss 1/1cmt 1/1pr day:2026-08-25 rises:0 starved:0/0/0\n"
+    )
+    assert [event["source"] for event in audited(state_dir, "derive_failed")] == ["pr", "issue"]
+    assert read_json(state_dir / "artefacts.json")["seen"]["skill"] == ["mcp/known"]

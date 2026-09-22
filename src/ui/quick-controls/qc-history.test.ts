@@ -4,12 +4,12 @@
  * Input-tab "keep bubble until dismissed" switch.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChatHistoryStore } from "../../io/chat-history-store";
-import { createFlagSettings } from "../../io/persisted-store";
-import { createSessionDiagnosticsStore } from "../../io/session-diagnostics";
-import { createSessionStore } from "../../io/session-store";
+import { createChatHistoryStore } from "../../io/chat/chat-history-store";
+import { createSessionDiagnosticsStore } from "../../io/chat/session-diagnostics";
+import { createSessionStore } from "../../io/chat/session-store";
+import { createFlagSettings } from "../../settings/persisted-store";
 import { setLocale } from "../i18n";
-import { createQuickControls } from "../quick-controls";
+import { createQuickControls } from "./quick-controls";
 import { defaultQcArgs } from "./test-helpers";
 
 function seedStore() {
@@ -113,7 +113,7 @@ describe("createQuickControls — history tab", () => {
     qc.dispose();
   });
 
-  it("renders one row per session, newest first, with turn counts", () => {
+  it("renders one row per session, newest first, with message counts", () => {
     const qc = buildQc({ transcript: seedStore() });
     qc.open();
 
@@ -121,6 +121,30 @@ describe("createQuickControls — history tab", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].querySelector(".yui-hist__sess-count")!.textContent).toContain("2");
     expect(rows[1].querySelector(".yui-hist__sess-count")!.textContent).toContain("2");
+
+    qc.dispose();
+  });
+
+  it("uses the singular form in English at n=1 and the plural form at n=2", () => {
+    const store = createChatHistoryStore();
+    store.append({
+      role: "user",
+      text: "hi",
+      ts: Date.parse("2026-08-13T09:12:00Z"),
+    });
+    const qc = buildQc({ transcript: store });
+    qc.open();
+
+    const rows = Array.from(qc.el.querySelectorAll<HTMLButtonElement>(".yui-hist__sess"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelector(".yui-hist__sess-count")!.textContent).toBe("1 message");
+
+    store.append({ role: "assistant", text: "hello", ts: Date.parse("2026-08-13T09:13:00Z") });
+
+    expect(
+      qc.el.querySelectorAll(".yui-hist__sess")[0].querySelector(".yui-hist__sess-count")!
+        .textContent,
+    ).toBe("2 messages");
 
     qc.dispose();
   });

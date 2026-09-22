@@ -12,4 +12,4 @@ Default label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `read
 
 ### Domain docs
 
-Single-context: root `CONTEXT.md` + `docs/adr/`, created lazily. See `docs/agents/domain.md`.
+Single-context: root `CONTEXT.md` glossary, created lazily. When naming a domain concept, use the term as `CONTEXT.md` defines it and avoid the synonyms it lists.

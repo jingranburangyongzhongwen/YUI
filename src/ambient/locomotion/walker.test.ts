@@ -1,0 +1,1211 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WalkConfig } from "../../config/load";
+import type { PetWindow, ScreenMonitor } from "../../io/window/geometry/screen-geometry";
+import type { RenderMotionSignal, TickContext, TickFn } from "../../renderer";
+import {
+  advanceX,
+  canStartStroll,
+  createWalker,
+  nextWalkDelay,
+  onFloor,
+  planStroll,
+  WALK_MOTION_ID,
+  WALK_YAW_EASE_MS,
+  WALK_YAW_RAD,
+  type WalkerDeps,
+  walkSpeedPxPerSec,
+} from "./walker";
+
+const CFG: WalkConfig = {
+  interval_min_ms: 60_000,
+  interval_max_ms: 180_000,
+  distance_min_px: 80,
+  distance_max_px: 320,
+  floor_tolerance_px: 8,
+};
+
+/** rng that yields the given values in order, then repeats the last one. */
+function seqRng(...values: number[]): () => number {
+  let i = 0;
+  return () => values[Math.min(i++, values.length - 1)] ?? 0;
+}
+
+describe("nextWalkDelay", () => {
+  it("draws inside the configured interval range", () => {
+    expect(nextWalkDelay(CFG, () => 0)).toBe(60_000);
+    expect(nextWalkDelay(CFG, () => 0.5)).toBe(120_000);
+    expect(nextWalkDelay(CFG, () => 1)).toBe(180_000);
+  });
+
+  it("honours a narrowed configured range", () => {
+    const cfg = { ...CFG, interval_min_ms: 1000, interval_max_ms: 2000 };
+    expect(nextWalkDelay(cfg, () => 0.25)).toBe(1250);
+  });
+});
+
+describe("walkSpeedPxPerSec", () => {
+  it("divides the clip's 1.34 m stride by the cycle length the clip actually loops on", () => {
+    expect(walkSpeedPxPerSec(100, 1.267)).toBeCloseTo((100 * 1.34) / 1.267, 6);
+  });
+
+  it("slows down as the cycle lengthens", () => {
+    expect(walkSpeedPxPerSec(100, 2.534)).toBeCloseTo(walkSpeedPxPerSec(100, 1.267) / 2, 6);
+  });
+
+  it("scales linearly with the framing so the feet never slide", () => {
+    expect(walkSpeedPxPerSec(600, 1.267)).toBeCloseTo(walkSpeedPxPerSec(300, 1.267) * 2, 6);
+  });
+});
+
+describe("onFloor", () => {
+  it("accepts a window bottom within tolerance of the work-area bottom", () => {
+    expect(onFloor(1000, 1000, 8)).toBe(true);
+    expect(onFloor(1006, 1000, 8)).toBe(true);
+    expect(onFloor(994, 1000, 8)).toBe(true);
+  });
+
+  it("rejects a window bottom outside tolerance on either side", () => {
+    expect(onFloor(1009, 1000, 8)).toBe(false);
+    expect(onFloor(600, 1000, 8)).toBe(false);
+  });
+});
+
+describe("canStartStroll", () => {
+  const ok = {
+    onFloor: true,
+    perched: false,
+    peeking: false,
+    dragging: false,
+    bodyFree: true,
+    reducedMotion: false,
+  };
+
+  it("passes when the character is idle on the floor", () => {
+    expect(canStartStroll(ok)).toBe(true);
+  });
+
+  it("does not read the pipeline: a turn in flight or speech playing is not a gate", () => {
+    expect(canStartStroll(ok)).toBe(true);
+  });
+
+  it.each([
+    ["off the floor", { onFloor: false }],
+    ["perched", { perched: true }],
+    ["peeking", { peeking: true }],
+    ["dragging", { dragging: true }],
+    ["a clip other than idle, thinking or walk holds the body", { bodyFree: false }],
+    ["reduced motion", { reducedMotion: true }],
+  ])("blocks on %s", (_label, blocker) => {
+    expect(canStartStroll({ ...ok, ...blocker })).toBe(false);
+  });
+});
+
+describe("planStroll", () => {
+  const base = { width: 200, workX: 0, workWidth: 1920, cfg: CFG };
+
+  it("walks the drawn distance to the right", () => {
+    expect(planStroll({ ...base, x: 500, rng: seqRng(0, 0.9) })).toEqual({
+      toX: 580,
+      direction: 1,
+    });
+  });
+
+  it("walks the drawn distance to the left", () => {
+    expect(planStroll({ ...base, x: 500, rng: seqRng(1, 0.1) })).toEqual({
+      toX: 180,
+      direction: -1,
+    });
+  });
+
+  it("clamps the destination to the right edge of the work area", () => {
+    expect(planStroll({ ...base, x: 1650, rng: seqRng(1, 0.9) })?.toX).toBe(1720);
+  });
+
+  it("clamps the destination to the left edge of the work area", () => {
+    expect(planStroll({ ...base, x: 50, rng: seqRng(1, 0.1) })?.toX).toBe(0);
+  });
+
+  it("clamps against a work area that does not start at the origin", () => {
+    expect(
+      planStroll({ ...base, x: 2000, workX: 1920, workWidth: 1280, rng: seqRng(1, 0.1) })?.toX,
+    ).toBe(1920);
+  });
+
+  it("returns null when the drawn direction has no room left", () => {
+    expect(planStroll({ ...base, x: 1720, rng: seqRng(1, 0.9) })).toBeNull();
+  });
+
+  it("returns null when the window is wider than the work area", () => {
+    expect(planStroll({ ...base, x: 0, width: 2000, rng: seqRng(0, 0.9) })).toBeNull();
+  });
+
+  it("reports the actual travel direction, not the drawn one the clamp overrode", () => {
+    // Drawn direction is right, but starting inside a cut-out the clamp pulls the
+    // destination to the segment's near (left) edge, so the real travel is leftward.
+    expect(
+      planStroll({ x: -200, width: 400, workX: -992, workWidth: 992, cfg: CFG, rng: seqRng(1, 1) }),
+    ).toEqual({ toX: -400, direction: -1 });
+  });
+});
+
+describe("advanceX", () => {
+  it("advances by speed × dt toward the destination", () => {
+    expect(advanceX(0, 100, 50, 1)).toBe(50);
+    expect(advanceX(100, 0, 50, 1)).toBe(50);
+  });
+
+  it("never overshoots the destination", () => {
+    expect(advanceX(0, 100, 50, 3)).toBe(100);
+    expect(advanceX(100, 0, 50, 10)).toBe(0);
+  });
+});
+
+// ── runtime loop ──────────────────────────────────────────────────────────────
+
+const MONITOR: ScreenMonitor = {
+  position: { x: 0, y: 0 },
+  size: { width: 1920, height: 1600 },
+  workArea: { position: { x: 0, y: 0 }, size: { width: 1920, height: 1500 } },
+  scaleFactor: 1,
+};
+
+/** Same floor line and scale, immediately to the right of MONITOR. */
+const NEIGHBOR: ScreenMonitor = {
+  position: { x: 1920, y: 0 },
+  size: { width: 1920, height: 1600 },
+  workArea: { position: { x: 1920, y: 0 }, size: { width: 1920, height: 1500 } },
+  scaleFactor: 1,
+};
+
+/** The shipped walk.vrma loops on its own last keyframe, not on a nominal 1.37 s cycle. */
+const CLIP_S = 1.267;
+/** Feet sit this far below the canvas top — the framing margin leaves the rest as headroom. */
+const FEET_Y = 420;
+/** Window sized 400×600 whose FEET (y + FEET_Y = 1500) rest on the floor; its bottom hangs below. */
+const WINDOW_POS = { x: 500, y: 1080 };
+
+/**
+ * rng () => 0 ⇒ a 60 s interval and an 80 px stroll to the left (destination 420).
+ */
+function makeHarness(
+  over: {
+    position?: { x: number; y: number };
+    /** Canvas-local logical y of the feet anchor. null models an unloaded VRM. */
+    feetY?: number | null;
+    pxPerMetre?: number | null;
+    perched?: boolean;
+    peeking?: boolean;
+    dragging?: boolean;
+    /** Duration (s) the walk clip loops on. null models a clip still loading. */
+    clipDuration?: number | null;
+    /** Models playMotion silently dropping the walk request (perch suppression, dead clip). */
+    motionRefused?: boolean;
+    motionKind?: WalkerDeps["currentMotionKind"];
+    /** The clip holding the body when the walker fires. Defaults to the idle baseline. */
+    currentMotion?: { id: string; vrma_path: string } | null;
+    rng?: () => number;
+    monitors?: ScreenMonitor[];
+    /** The window's own scale factor. Defaults to 1. */
+    windowScale?: number;
+    descendChance?: number;
+    /** Overrides windowScale with a call-counted function, for a scale that changes mid-stroll. */
+    scaleFactor?: () => number;
+  } = {},
+) {
+  let tick: TickFn | null = null;
+  const motions: Array<RenderMotionSignal | null> = [];
+  const yaws: Array<{ rad: number; easeMs: number }> = [];
+  const positions: Array<{ x: number; y: number }> = [];
+  const logicalCalls: Array<{ x: number; y: number }> = [];
+  const scaleFactor = over.scaleFactor ?? (() => over.windowScale ?? 1);
+  let currentMotion: { id: string; vrma_path: string } | null = over.currentMotion ?? {
+    id: "idle",
+    vrma_path: "/motions/calm.vrma",
+  };
+  const starts = vi.fn();
+  const ends = vi.fn();
+  const descends = vi.fn();
+  // Fake travel frame: begin() hands back a virtual window that shares the same position
+  // state as the real one (so positions/logicalCalls keep reading the true window) but
+  // logs its own calls separately, proving a step moved through the travel and not the
+  // real window directly.
+  const travelBeginCalls: Array<{ x: number; y: number }> = [];
+  const travelLogicalCalls: Array<{ x: number; y: number }> = [];
+  let travelEndCalls = 0;
+  let travelWin: ReturnType<typeof makeRealWindow> | null = null;
+  function makeRealWindow(onSet?: (x: number, y: number) => void) {
+    return {
+      outerPosition: async () => over.position ?? WINDOW_POS,
+      outerSize: async () => {
+        const scale = scaleFactor();
+        return { width: 400 * scale, height: 600 * scale };
+      },
+      scaleFactor: async () => scaleFactor(),
+      setPositionLogical: async (x: number, y: number) => {
+        onSet?.(x, y);
+        logicalCalls.push({ x, y });
+        positions.push({ x, y });
+      },
+    };
+  }
+  const realWindow = makeRealWindow();
+  const fakeTravel = {
+    begin: vi.fn(async (end: { x: number; y: number }) => {
+      travelBeginCalls.push(end);
+      const win = makeRealWindow((x, y) => travelLogicalCalls.push({ x, y }));
+      travelWin = win;
+      return {
+        win,
+        end: async () => {
+          travelEndCalls++;
+          travelWin = null;
+        },
+      };
+    }),
+    current: () => travelWin,
+  };
+  const visibilityListeners = new Set<() => void>();
+  const doc = {
+    visibilityState: "visible",
+    addEventListener: (_t: "visibilitychange", cb: () => void) => {
+      visibilityListeners.add(cb);
+    },
+    removeEventListener: (_t: "visibilitychange", cb: () => void) => {
+      visibilityListeners.delete(cb);
+    },
+  };
+
+  const deps: WalkerDeps = {
+    renderer: {
+      onTick: (fn) => {
+        tick = fn;
+        return () => {
+          tick = null;
+        };
+      },
+      playMotion: (m) => {
+        motions.push(m);
+        if (over.motionRefused) return;
+        currentMotion = m ? { id: m.id, vrma_path: `/motions/${m.id}.vrma` } : null;
+      },
+      getCurrentMotion: () => currentMotion,
+      getMotionDuration: () => (over.clipDuration === undefined ? CLIP_S : over.clipDuration),
+      setBodyYaw: (rad, easeMs) => {
+        yaws.push({ rad, easeMs });
+      },
+      getPxPerMetre: () => (over.pxPerMetre === undefined ? 300 : over.pxPerMetre),
+      getCharacterAnchor: () => {
+        const y = over.feetY === undefined ? FEET_Y : over.feetY;
+        return y === null ? null : { x: 200, y };
+      },
+      isPerched: () => over.perched ?? false,
+    },
+    getWindow: () => travelWin ?? realWindow,
+    travel: fakeTravel,
+    listMonitors: async () => over.monitors ?? [MONITOR],
+    getConfig: () => CFG,
+    getDescendConfig: () => ({
+      chance: over.descendChance ?? 0.5,
+      climb_down_chance: 0.5,
+    }),
+    currentMotionKind: over.motionKind ?? (() => "ambient"),
+    isPeeking: () => over.peeking ?? false,
+    isDragging: () => over.dragging ?? false,
+    doc,
+    onStart: starts,
+    onEnd: ends,
+    onDescend: descends,
+    rng: over.rng ?? (() => 0),
+  };
+
+  const walker = createWalker(deps);
+  let elapsed = 0;
+  const frame = async (dt = 1 / 60): Promise<void> => {
+    elapsed += dt;
+    tick?.({ vrm: {} as never, dt, elapsed } as TickContext);
+    // Let the async window/monitor reads settle before the next frame.
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+  };
+  /** One frame with no microtask flush — leaves the fire-time reads in flight. */
+  const tickOnly = (dt: number): void => {
+    elapsed += dt;
+    tick?.({ vrm: {} as never, dt, elapsed } as TickContext);
+  };
+  /** One frame to arm the interval, then one that lands past it. */
+  const skipInterval = async (): Promise<void> => {
+    await frame();
+    await frame(200);
+  };
+
+  return {
+    walker,
+    motions,
+    yaws,
+    positions,
+    logicalCalls,
+    travelBeginCalls,
+    travelLogicalCalls,
+    travelEndCalls: () => travelEndCalls,
+    fakeTravel,
+    starts,
+    ends,
+    descends,
+    frame,
+    tickOnly,
+    skipInterval,
+    setCurrentMotion: (m: { id: string; vrma_path: string } | null) => {
+      currentMotion = m;
+    },
+    hide: () => {
+      doc.visibilityState = "hidden";
+      for (const cb of visibilityListeners) cb();
+    },
+    visibilityListenerCount: () => visibilityListeners.size,
+    hasTick: () => tick !== null,
+  };
+}
+
+describe("createWalker", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("registers a tick hook on start and unregisters it on stop", () => {
+    const h = makeHarness();
+    expect(h.hasTick()).toBe(false);
+    h.walker.start();
+    expect(h.hasTick()).toBe(true);
+    h.walker.stop();
+    expect(h.hasTick()).toBe(false);
+  });
+
+  it("holds still until the armed interval elapses", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.frame();
+    await h.frame(59);
+    expect(h.motions).toEqual([]);
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
+  it("plays the walk clip and yaws toward the travel direction when the interval fires", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }]);
+    expect(h.yaws).toEqual([{ rad: -WALK_YAW_RAD, easeMs: WALK_YAW_EASE_MS }]);
+    expect(h.starts).toHaveBeenCalledTimes(1);
+  });
+
+  it("yaws the opposite way for a rightward stroll", async () => {
+    const h = makeHarness({ rng: () => 0.9 });
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.yaws).toEqual([{ rad: WALK_YAW_RAD, easeMs: WALK_YAW_EASE_MS }]);
+  });
+
+  it("translates the window to the destination without overshoot, then returns to idle", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    // 80 logical px at ~293 px/s ≈ 0.27 s.
+    for (let i = 0; i < 30; i++) await h.frame();
+    expect(h.positions.at(-1)).toEqual({ x: 420, y: WINDOW_POS.y });
+    for (const p of h.positions) {
+      expect(p.x).toBeGreaterThanOrEqual(420);
+      expect(p.x).toBeLessThanOrEqual(500);
+      expect(p.y).toBe(WINDOW_POS.y);
+    }
+    expect(h.positions.length).toBeGreaterThan(5);
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }, null]);
+    expect(h.yaws.at(-1)).toEqual({ rad: 0, easeMs: WALK_YAW_EASE_MS });
+    expect(h.ends).toHaveBeenCalledTimes(1);
+    expect(h.ends).toHaveBeenCalledWith(true);
+  });
+
+  it("moves the window through setPositionLogical, in logical points, on a scaled screen", async () => {
+    // Same logical geometry as MONITOR/WINDOW_POS, doubled into scale-2 physical px.
+    const SCALE2_MONITOR: ScreenMonitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 3840, height: 3200 },
+      workArea: { position: { x: 0, y: 0 }, size: { width: 3840, height: 3000 } },
+      scaleFactor: 2,
+    };
+    const h = makeHarness({
+      position: { x: WINDOW_POS.x * 2, y: WINDOW_POS.y * 2 },
+      monitors: [SCALE2_MONITOR],
+      windowScale: 2,
+    });
+    h.walker.start();
+    await h.skipInterval();
+    for (let i = 0; i < 30; i++) await h.frame();
+    expect(h.logicalCalls.length).toBeGreaterThan(0);
+    for (const call of h.logicalCalls) {
+      expect(call.y).toBe(WINDOW_POS.y);
+    }
+    expect(h.logicalCalls.at(-1)).toEqual({ x: 420, y: WINDOW_POS.y });
+  });
+
+  it("does not re-read the window's scale factor once the stroll is moving", async () => {
+    const SCALE2_MONITOR: ScreenMonitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 3840, height: 3200 },
+      workArea: { position: { x: 0, y: 0 }, size: { width: 3840, height: 3000 } },
+      scaleFactor: 2,
+    };
+    let calls = 0;
+    const h = makeHarness({
+      position: { x: WINDOW_POS.x * 2, y: WINDOW_POS.y * 2 },
+      monitors: [SCALE2_MONITOR],
+      // The stroll reads the scale once, at the start; step() must not read it again —
+      // if it did, the logical y written afterwards would jump to the physical value.
+      scaleFactor: () => (calls++ === 0 ? 2 : 1),
+    });
+    h.walker.start();
+    await h.skipInterval();
+    for (let i = 0; i < 30; i++) await h.frame();
+    for (const call of h.logicalCalls) {
+      expect(call.y).toBe(WINDOW_POS.y);
+    }
+  });
+
+  it("continues a rightward stroll onto a neighbouring monitor that shares the floor line", async () => {
+    // Standing near MONITOR's right edge (1920): a max-distance rightward draw crosses it.
+    const h = makeHarness({
+      position: { x: 1700, y: WINDOW_POS.y },
+      monitors: [MONITOR, NEIGHBOR],
+      rng: seqRng(0, 1, 1),
+    });
+    h.walker.start();
+    await h.skipInterval();
+    for (let i = 0; i < 90; i++) await h.frame();
+    expect(h.positions.at(-1)!.x).toBeGreaterThan(1920);
+  });
+
+  describe("monitor descent planning", () => {
+    const BUILTIN: ScreenMonitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 3456, height: 2234 },
+      workArea: { position: { x: 0, y: 100 }, size: { width: 3456, height: 1934 } },
+      scaleFactor: 2,
+    };
+    const UPPER_LEFT: ScreenMonitor = {
+      position: { x: -992, y: -1080 },
+      size: { width: 1920, height: 1080 },
+      workArea: { position: { x: -992, y: -1055 }, size: { width: 1920, height: 1055 } },
+      scaleFactor: 1,
+    };
+    const monitors = [BUILTIN, UPPER_LEFT];
+    const edge = { side: "right", edgeX: 0, topY: 0, bottomY: 1017 };
+
+    it("walks to the descent edge and fires it on arrival when the chance passes", async () => {
+      const h = makeHarness({
+        position: { x: -700, y: -420 },
+        monitors,
+        rng: seqRng(0, 0, 0, 0, 0),
+      });
+      h.walker.start();
+      await h.skipInterval();
+
+      for (let i = 0; i < 90; i++) await h.frame();
+
+      expect(h.positions.at(-1)).toEqual({ x: -400, y: -420 });
+      expect(h.descends).toHaveBeenCalledOnce();
+      expect(h.descends).toHaveBeenCalledWith(edge);
+    });
+
+    it("keeps the ordinary stroll when the descent chance misses", async () => {
+      const h = makeHarness({
+        position: { x: -700, y: -420 },
+        monitors,
+        rng: seqRng(0, 0, 0, 0, 0.9),
+      });
+      h.walker.start();
+      await h.skipInterval();
+
+      for (let i = 0; i < 60; i++) await h.frame();
+
+      expect(h.positions.at(-1)).toEqual({ x: -780, y: -420 });
+      expect(h.descends).not.toHaveBeenCalled();
+    });
+
+    it("never plans a descent for an escape stroll", async () => {
+      const h = makeHarness({
+        position: { x: -200, y: -420 },
+        monitors,
+        descendChance: 1,
+        rng: seqRng(0, 0, 0, 1, 0),
+      });
+      h.walker.start();
+      await h.skipInterval();
+
+      for (let i = 0; i < 90; i++) await h.frame();
+
+      expect(h.positions.at(-1)).toEqual({ x: -400, y: -420 });
+      expect(h.descends).not.toHaveBeenCalled();
+    });
+
+    it("drops a planned descent when the stroll is cancelled", async () => {
+      const h = makeHarness({
+        position: { x: -700, y: -420 },
+        monitors,
+        descendChance: 1,
+        rng: seqRng(0, 0, 0, 0, 0),
+      });
+      h.walker.start();
+      await h.skipInterval();
+      await h.frame();
+      h.walker.cancel();
+
+      for (let i = 0; i < 90; i++) await h.frame();
+
+      expect(h.descends).not.toHaveBeenCalled();
+    });
+  });
+
+  it("walks a stroll starting in a monitor-overlap cut-out to the nearest safe segment", async () => {
+    // Built-in: 1728×1117 logical at (0,0), scale 2 — sits directly under the row above.
+    const BUILTIN: ScreenMonitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 3456, height: 2234 },
+      workArea: { position: { x: 0, y: 100 }, size: { width: 3456, height: 1934 } },
+      scaleFactor: 2,
+    };
+    // 1920×1080 logical at (−992, −1080), scale 1 — floor line (no dock) at y = 0.
+    const UPPER_LEFT: ScreenMonitor = {
+      position: { x: -992, y: -1080 },
+      size: { width: 1920, height: 1080 },
+      workArea: { position: { x: -992, y: -1055 }, size: { width: 1920, height: 1055 } },
+      scaleFactor: 1,
+    };
+    const UPPER_RIGHT: ScreenMonitor = {
+      position: { x: 928, y: -1080 },
+      size: { width: 1920, height: 1080 },
+      workArea: { position: { x: 928, y: -1055 }, size: { width: 1920, height: 1055 } },
+      scaleFactor: 1,
+    };
+    // Feet 447 below the canvas top ⇒ hangPx 153 (window height 600 minus 447): the
+    // window's bottom margin reaches into BUILTIN even though the feet rest on
+    // UPPER_LEFT's own floor at x = −200, inside the resulting cut-out.
+    const h = makeHarness({
+      position: { x: -200, y: -447 },
+      feetY: 447,
+      monitors: [BUILTIN, UPPER_LEFT, UPPER_RIGHT],
+      rng: seqRng(0, 0, 1),
+    });
+    h.walker.start();
+    await h.skipInterval();
+    // The drawn direction is rightward; the clamp pulls the destination to the segment's
+    // left edge instead, so the actual travel — and the yaw facing it — is leftward.
+    expect(h.yaws[0]).toEqual({ rad: -WALK_YAW_RAD, easeMs: WALK_YAW_EASE_MS });
+    // Starting outside every usable segment, the whole stroll runs inside a travel: the
+    // real window parks once at the destination instead of moving every frame.
+    expect(h.travelBeginCalls).toEqual([{ x: -400, y: -447 }]);
+    // 200 logical px at ~317 px/s ≈ 0.63 s.
+    for (let i = 0; i < 60; i++) await h.frame();
+    expect(h.positions.at(-1)!.x).toBe(-400);
+    // Every step drew through the travel's virtual window, not the real one directly.
+    expect(h.travelLogicalCalls).toEqual(h.logicalCalls);
+    expect(h.travelLogicalCalls.length).toBeGreaterThan(0);
+    expect(h.travelEndCalls()).toBe(1);
+  });
+
+  it("never begins a travel for a stroll that starts inside a usable segment", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    for (let i = 0; i < 30; i++) await h.frame();
+
+    expect(h.travelBeginCalls).toEqual([]);
+    expect(h.travelLogicalCalls).toEqual([]);
+  });
+
+  it("never begins a travel when the walk request is refused, even starting outside every segment", async () => {
+    // Same cut-out fixture as above, starting at x = -200 — outside every usable segment.
+    const BUILTIN: ScreenMonitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 3456, height: 2234 },
+      workArea: { position: { x: 0, y: 100 }, size: { width: 3456, height: 1934 } },
+      scaleFactor: 2,
+    };
+    const UPPER_LEFT: ScreenMonitor = {
+      position: { x: -992, y: -1080 },
+      size: { width: 1920, height: 1080 },
+      workArea: { position: { x: -992, y: -1055 }, size: { width: 1920, height: 1055 } },
+      scaleFactor: 1,
+    };
+    const UPPER_RIGHT: ScreenMonitor = {
+      position: { x: 928, y: -1080 },
+      size: { width: 1920, height: 1080 },
+      workArea: { position: { x: 928, y: -1055 }, size: { width: 1920, height: 1055 } },
+      scaleFactor: 1,
+    };
+    const h = makeHarness({
+      position: { x: -200, y: -447 },
+      feetY: 447,
+      monitors: [BUILTIN, UPPER_LEFT, UPPER_RIGHT],
+      rng: seqRng(0, 0, 1),
+      motionRefused: true,
+    });
+    h.walker.start();
+    await h.skipInterval();
+
+    expect(h.starts).not.toHaveBeenCalled();
+    expect(h.travelBeginCalls).toEqual([]);
+  });
+
+  it("releases the walk clip when the stroll is cancelled during a pending begin", async () => {
+    const BUILTIN: ScreenMonitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 3456, height: 2234 },
+      workArea: { position: { x: 0, y: 100 }, size: { width: 3456, height: 1934 } },
+      scaleFactor: 2,
+    };
+    const UPPER_LEFT: ScreenMonitor = {
+      position: { x: -992, y: -1080 },
+      size: { width: 1920, height: 1080 },
+      workArea: { position: { x: -992, y: -1055 }, size: { width: 1920, height: 1055 } },
+      scaleFactor: 1,
+    };
+    const UPPER_RIGHT: ScreenMonitor = {
+      position: { x: 928, y: -1080 },
+      size: { width: 1920, height: 1080 },
+      workArea: { position: { x: 928, y: -1055 }, size: { width: 1920, height: 1055 } },
+      scaleFactor: 1,
+    };
+    const h = makeHarness({
+      position: { x: -200, y: -447 },
+      feetY: 447,
+      monitors: [BUILTIN, UPPER_LEFT, UPPER_RIGHT],
+      rng: seqRng(0, 0, 1),
+    });
+    let resolveBegin!: (t: { win: PetWindow; end: () => Promise<void> }) => void;
+    h.fakeTravel.begin.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveBegin = resolve;
+        }),
+    );
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }]);
+
+    h.walker.cancel();
+    resolveBegin({ win: {} as PetWindow, end: async () => {} });
+    for (let i = 0; i < 10; i++) await h.frame();
+
+    expect(h.motions.at(-1)).toBeNull();
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
+  it("picks a wide segment over a nearer sliver too narrow for any stroll distance", async () => {
+    // Cuts MONITOR's [0, 1520] window-origin range into a 2 px sliver [0, 2], where the
+    // window already sits, and a wide [1200, 1520] remainder further away.
+    const CUTTER: ScreenMonitor = {
+      position: { x: 804, y: 3000 },
+      size: { width: 1596, height: 400 },
+      workArea: { position: { x: 804, y: 3000 }, size: { width: 1596, height: 400 } },
+      scaleFactor: 2,
+    };
+    const h = makeHarness({
+      position: { x: 1, y: WINDOW_POS.y },
+      monitors: [MONITOR, CUTTER],
+    });
+    h.walker.start();
+    await h.skipInterval();
+    for (let i = 0; i < 240; i++) await h.frame();
+    expect(h.positions.at(-1)!.x).toBe(1200);
+  });
+
+  it("starts no stroll when a monitor below covers the entire floor segment", async () => {
+    const FULL_CUT: ScreenMonitor = {
+      position: { x: -1000, y: 3000 },
+      size: { width: 6000, height: 400 },
+      workArea: { position: { x: -1000, y: 3000 }, size: { width: 6000, height: 400 } },
+      scaleFactor: 2,
+    };
+    const h = makeHarness({ monitors: [MONITOR, FULL_CUT] });
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.motions).toEqual([]);
+    expect(h.starts).not.toHaveBeenCalled();
+    expect(h.positions).toEqual([]);
+  });
+
+  it("skips and redraws when the feet are not resting on the work-area floor", async () => {
+    const h = makeHarness({ position: { x: 500, y: 400 } });
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.motions).toEqual([]);
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
+  it("skips when the window bottom rests on the floor but the feet float above it", async () => {
+    // Window bottom 900 + 600 = 1500 == the floor, yet the feet project 180px higher.
+    const h = makeHarness({ position: { x: 500, y: 900 } });
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.motions).toEqual([]);
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
+  it("starts when the feet rest on the floor even though the window bottom hangs below it", async () => {
+    // Feet 1080 + 420 = 1500 == the floor; the window bottom is 180px past the work area.
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.starts).toHaveBeenCalledTimes(1);
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }]);
+  });
+
+  it("skips when the feet anchor is unavailable", async () => {
+    const h = makeHarness({ feetY: null });
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["perched", { perched: true }],
+    ["peeking", { peeking: true }],
+    ["dragging", { dragging: true }],
+    [
+      "a reactive motion holds the body",
+      {
+        motionKind: () => "reactive" as const,
+        currentMotion: { id: "head_pat", vrma_path: "/motions/head_pat.vrma" },
+      },
+    ],
+    [
+      "a state clip other than thinking holds the body",
+      {
+        motionKind: () => "state" as const,
+        currentMotion: { id: "window_sit", vrma_path: "/motions/window_sit.vrma" },
+      },
+    ],
+  ])("skips while %s", async (_label, over) => {
+    const h = makeHarness(over);
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.motions).toEqual([]);
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "the thinking clip holds the body",
+      {
+        motionKind: () => "state" as const,
+        currentMotion: { id: "thinking", vrma_path: "/motions/thinking.vrma" },
+      },
+    ],
+    [
+      "the walk clip holds the body",
+      {
+        motionKind: () => "reactive" as const,
+        currentMotion: { id: "walk", vrma_path: "/motions/walk.vrma" },
+      },
+    ],
+  ])("starts while %s", async (_label, over) => {
+    const h = makeHarness(over);
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.starts).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports an ambient stroll in progress, and not a directed walk", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    expect(h.walker.isStrolling()).toBe(false);
+    await h.skipInterval();
+    expect(h.walker.isStrolling()).toBe(true);
+    expect(h.walker.isWalkingTo()).toBe(false);
+    h.walker.cancel();
+    expect(h.walker.isStrolling()).toBe(false);
+    expect(h.walker.isWalkingTo()).toBe(false);
+    void h.walker.walkTo(700);
+    await h.frame();
+    expect(h.walker.isStrolling()).toBe(false);
+    expect(h.walker.isWalkingTo()).toBe(true);
+  });
+
+  it("skips when the framing cannot be measured", async () => {
+    const h = makeHarness({ pxPerMetre: null });
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
+  it("stops translating when a higher-priority motion takes the walk clip", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    await h.frame();
+    const movedSoFar = h.positions.length;
+    h.setCurrentMotion({ id: "happy", vrma_path: "/motions/happy.vrma" });
+    await h.frame();
+    await h.frame();
+    expect(h.positions.length).toBe(movedSoFar);
+    // The incoming motion owns the body — the walker must not force it back to idle.
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }]);
+    expect(h.yaws.at(-1)).toEqual({ rad: 0, easeMs: WALK_YAW_EASE_MS });
+    expect(h.ends).toHaveBeenCalledTimes(1);
+    // Another clip already owns the body — the walker did not hand it back.
+    expect(h.ends).toHaveBeenCalledWith(false);
+  });
+
+  it("cancel() aborts a running stroll, returns the yaw, and reports the end once", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    await h.frame();
+    const movedSoFar = h.positions.length;
+    h.walker.cancel();
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }, null]);
+    expect(h.yaws.at(-1)).toEqual({ rad: 0, easeMs: WALK_YAW_EASE_MS });
+    expect(h.ends).toHaveBeenCalledTimes(1);
+    await h.frame();
+    expect(h.positions.length).toBe(movedSoFar);
+    h.walker.cancel();
+    expect(h.ends).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a stroll whose plan was still in flight when a cancel landed", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.frame();
+    h.tickOnly(200);
+    h.walker.cancel();
+    await h.frame();
+    expect(h.starts).not.toHaveBeenCalled();
+    expect(h.motions).toEqual([]);
+  });
+
+  it("ends a running stroll when the document goes hidden", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    await h.frame();
+    const movedSoFar = h.positions.length;
+
+    h.hide();
+    expect(h.ends).toHaveBeenCalledTimes(1);
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }, null]);
+
+    await h.frame();
+    expect(h.positions.length).toBe(movedSoFar);
+  });
+
+  it("drops the visibility listener on stop", () => {
+    const h = makeHarness();
+    h.walker.start();
+    expect(h.visibilityListenerCount()).toBe(1);
+    h.walker.stop();
+    expect(h.visibilityListenerCount()).toBe(0);
+  });
+
+  it("does not report a start when the walk request is refused", async () => {
+    const h = makeHarness({ motionRefused: true });
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }]);
+    expect(h.starts).not.toHaveBeenCalled();
+    expect(h.ends).not.toHaveBeenCalled();
+    expect(h.yaws).toEqual([]);
+
+    await h.frame();
+    expect(h.positions).toEqual([]);
+  });
+
+  it("clamps a long frame delta so a throttled gap does not hop to the destination", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+
+    // 5 s of accumulated clock would cover the whole 80 px stroll many times over.
+    await h.frame(5);
+    const x = h.positions.at(-1)!.x;
+    expect(x).toBeGreaterThan(420);
+    expect(x).toBeLessThan(500);
+    expect(h.ends).not.toHaveBeenCalled();
+  });
+
+  it("paces the window at the loaded clip's own cycle, not a nominal one", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+
+    // A full clamped frame — a 1/60 s step is too small to separate 1.267 s from 1.37 s.
+    const dt = 0.1;
+    await h.frame(dt);
+    // 300 px/m over a 1.267 s cycle carrying 1.34 m of stride.
+    const expected = WINDOW_POS.x - ((300 * 1.34) / CLIP_S) * dt;
+    expect(h.positions.at(-1)!.x).toBe(Math.round(expected));
+  });
+
+  it("holds position while the walk clip is still loading", async () => {
+    const h = makeHarness({ clipDuration: null });
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.starts).toHaveBeenCalledTimes(1);
+
+    await h.frame();
+    await h.frame();
+    expect(h.positions).toEqual([]);
+    expect(h.ends).not.toHaveBeenCalled();
+  });
+
+  it("cancel() outside a stroll reports nothing", () => {
+    const h = makeHarness();
+    h.walker.start();
+    h.walker.cancel();
+    expect(h.ends).not.toHaveBeenCalled();
+  });
+
+  it("stop() ends a running stroll", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    h.walker.stop();
+    expect(h.ends).toHaveBeenCalledTimes(1);
+  });
+
+  it("never starts a stroll while prefers-reduced-motion is set", async () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.starts).not.toHaveBeenCalled();
+  });
+
+  it("cancels a running stroll when reduced motion turns on", async () => {
+    const listeners: Array<(e: { matches: boolean }) => void> = [];
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener: (_: string, cb: (e: { matches: boolean }) => void) => {
+        listeners.push(cb);
+      },
+      removeEventListener: () => {},
+    }));
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.ends).not.toHaveBeenCalled();
+    for (const cb of listeners) cb({ matches: true });
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }, null]);
+    expect(h.ends).toHaveBeenCalledTimes(1);
+  });
+
+  it("redraws the interval after a stroll instead of chaining another one", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    for (let i = 0; i < 30; i++) await h.frame();
+    expect(h.starts).toHaveBeenCalledTimes(1);
+    await h.frame(59);
+    expect(h.starts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createWalker — walkTo", () => {
+  /** Run frames until the directed walk settles, or give up. */
+  async function settle(
+    h: ReturnType<typeof makeHarness>,
+    walk: Promise<"arrived" | "lost">,
+  ): Promise<"arrived" | "lost" | "pending"> {
+    let out: "arrived" | "lost" | "pending" = "pending";
+    void walk.then((r) => {
+      out = r;
+    });
+    for (let i = 0; i < 200 && out === "pending"; i++) await h.frame();
+    return out;
+  }
+
+  it("walks to the requested x and reports the arrival", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    expect(await settle(h, h.walker.walkTo(300))).toBe("arrived");
+    expect(h.positions.at(-1)).toEqual({ x: 300, y: WINDOW_POS.y });
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }, null]);
+  });
+
+  it("arrives at exactly the logical target on a scaled screen", async () => {
+    const h = makeHarness({
+      position: { x: WINDOW_POS.x * 2, y: WINDOW_POS.y * 2 },
+      windowScale: 2,
+    });
+    h.walker.start();
+    expect(await settle(h, h.walker.walkTo(300))).toBe("arrived");
+    expect(h.logicalCalls.at(-1)).toEqual({ x: 300, y: WINDOW_POS.y });
+  });
+
+  it("keeps the walk clip on arrival when the caller will replace it", async () => {
+    // The caller's next clip crossfades straight out of the walk instead of through idle.
+    const h = makeHarness();
+    h.walker.start();
+    expect(await settle(h, h.walker.walkTo(300, undefined, true))).toBe("arrived");
+    expect(h.motions).toEqual([{ id: WALK_MOTION_ID }]);
+  });
+
+  it("yaws toward the destination and leaves the window's y untouched", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await settle(h, h.walker.walkTo(900));
+    expect(h.yaws[0]).toEqual({ rad: WALK_YAW_RAD, easeMs: WALK_YAW_EASE_MS });
+    for (const p of h.positions) expect(p.y).toBe(WINDOW_POS.y);
+  });
+
+  it("holds the window under a clip that took the walk, then reclaims it and arrives", async () => {
+    // A directed walk belongs to the caller's sequence, so an express clip mid-walk must
+    // not end it — that would strand a descent on the ledge with its perch already gone.
+    let kind: "ambient" | "oneshot" = "ambient";
+    const h = makeHarness({ motionKind: () => kind });
+    h.walker.start();
+    const walk = h.walker.walkTo(300);
+    await h.frame();
+    await h.frame();
+    const held = h.positions.at(-1);
+    expect(held).toBeDefined();
+
+    kind = "oneshot";
+    h.setCurrentMotion({ id: "happy", vrma_path: "/motions/happy.vrma" });
+    await h.frame();
+    await h.frame();
+    expect(h.walker.isWalkingTo()).toBe(true);
+    expect(h.positions.at(-1)).toEqual(held);
+
+    kind = "ambient";
+    h.setCurrentMotion({ id: "idle", vrma_path: "/motions/calm.vrma" });
+    expect(await settle(h, walk)).toBe("arrived");
+    expect(h.positions.at(-1)).toEqual({ x: 300, y: WINDOW_POS.y });
+  });
+
+  it("reports the walk lost when cancel() runs", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    const walk = h.walker.walkTo(300);
+    await h.frame();
+    h.walker.cancel();
+    expect(await walk).toBe("lost");
+  });
+
+  it("reports acceptance once a directed walk enters the frame loop", async () => {
+    const h = makeHarness();
+    const accepted = vi.fn();
+    h.walker.start();
+
+    const walk = h.walker.walkTo(300, accepted);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(await settle(h, walk)).toBe("arrived");
+    expect(accepted).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report acceptance when a directed walk is refused", async () => {
+    const h = makeHarness({ motionRefused: true });
+    const accepted = vi.fn();
+    h.walker.start();
+
+    expect(await h.walker.walkTo(300, accepted)).toBe("lost");
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ambient stroll callbacks out of a directed walk", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await settle(h, h.walker.walkTo(300));
+    expect(h.starts).not.toHaveBeenCalled();
+    expect(h.ends).not.toHaveBeenCalled();
+  });
+
+  it("cancels a running stroll before taking the directed walk", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    await h.skipInterval();
+    expect(h.starts).toHaveBeenCalledTimes(1);
+    expect(await settle(h, h.walker.walkTo(900))).toBe("arrived");
+    expect(h.ends).toHaveBeenCalledTimes(1);
+    expect(h.positions.at(-1)).toEqual({ x: 900, y: WINDOW_POS.y });
+  });
+
+  it("arrives without a clip when the window already sits at the destination", async () => {
+    const h = makeHarness();
+    h.walker.start();
+    expect(await h.walker.walkTo(WINDOW_POS.x)).toBe("arrived");
+    expect(h.motions).toEqual([]);
+  });
+
+  it("skips the floor gate so the same call walks a window top", async () => {
+    const h = makeHarness({ position: { x: 500, y: 400 } });
+    h.walker.start();
+    expect(await settle(h, h.walker.walkTo(300))).toBe("arrived");
+    expect(h.positions.at(-1)).toEqual({ x: 300, y: 400 });
+  });
+
+  describe("floor-segment clamp", () => {
+    // Built-in: 1728×1117 logical at (0,0), scale 2 — sits directly under the row above.
+    const BUILTIN: ScreenMonitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 3456, height: 2234 },
+      workArea: { position: { x: 0, y: 100 }, size: { width: 3456, height: 1934 } },
+      scaleFactor: 2,
+    };
+    // 1920×1080 logical at (−992, −1080), scale 1 — floor line (no dock) at y = 0. Its
+    // usable segment is [-992, -400]; [-400, 1728] flickers above BUILTIN's scale seam.
+    const UPPER_LEFT: ScreenMonitor = {
+      position: { x: -992, y: -1080 },
+      size: { width: 1920, height: 1080 },
+      workArea: { position: { x: -992, y: -1055 }, size: { width: 1920, height: 1055 } },
+      scaleFactor: 1,
+    };
+
+    it("clamps a walkTo into the cut-out to the nearest floor segment", async () => {
+      // On the floor, well inside the usable segment.
+      const h = makeHarness({
+        position: { x: -600, y: -447 },
+        feetY: 447,
+        monitors: [BUILTIN, UPPER_LEFT],
+      });
+      h.walker.start();
+
+      expect(await settle(h, h.walker.walkTo(-200))).toBe("arrived");
+
+      expect(h.positions.at(-1)).toEqual({ x: -400, y: -447 });
+      expect(h.travelBeginCalls).toEqual([]);
+    });
+
+    it("does not clamp a walkTo while a travel is current", async () => {
+      const h = makeHarness({
+        position: { x: -600, y: -447 },
+        feetY: 447,
+        monitors: [BUILTIN, UPPER_LEFT],
+      });
+      await h.fakeTravel.begin({ x: -200, y: -447 });
+      h.walker.start();
+
+      expect(await settle(h, h.walker.walkTo(-200))).toBe("arrived");
+
+      expect(h.positions.at(-1)).toEqual({ x: -200, y: -447 });
+    });
+
+    it("does not clamp a walkTo off the floor", async () => {
+      // Feet well above the floor line — a perched ledge walk, not a floor stroll.
+      const h = makeHarness({
+        position: { x: -600, y: -900 },
+        feetY: 447,
+        monitors: [BUILTIN, UPPER_LEFT],
+      });
+      h.walker.start();
+
+      expect(await settle(h, h.walker.walkTo(-200))).toBe("arrived");
+
+      expect(h.positions.at(-1)).toEqual({ x: -200, y: -900 });
+    });
+  });
+});

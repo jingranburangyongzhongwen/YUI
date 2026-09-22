@@ -15,7 +15,6 @@ describe("loadConfig — endpoints TTS", () => {
     const map = goodFixture();
     map["endpoints.json"] = {
       chat_base_url: "http://localhost:8642",
-      chat_endpoint: "/v1/responses",
       stt_base_url: "http://localhost:5517",
       tts_base_url: "http://localhost:8092",
       tts_model: "irodori-tts",
@@ -25,7 +24,6 @@ describe("loadConfig — endpoints TTS", () => {
     const cfg = await loadConfig({ read: readerOf(map) });
     expect(cfg.endpoints).toEqual({
       chat_base_url: "http://localhost:8642",
-      chat_endpoint: "/v1/responses",
       stt_base_url: "http://localhost:5517",
       tts_base_url: "http://localhost:8092",
       tts_model: "irodori-tts",
@@ -38,7 +36,6 @@ describe("loadConfig — endpoints TTS", () => {
     const map = goodFixture();
     map["endpoints.json"] = {
       chat_base_url: "http://localhost:8642",
-      chat_endpoint: "/v1/responses",
       stt_base_url: "http://localhost:5517",
       tts_base_url: "http://localhost:8092",
     };
@@ -53,7 +50,7 @@ describe("loadConfig — endpoints TTS", () => {
 describe("loadConfig — endpoints with no URLs", () => {
   it("boots with a URL-less endpoints.json: every service reads as unset", async () => {
     const map = goodFixture();
-    map["endpoints.json"] = { chat_endpoint: "/v1/responses", chat_api: "responses" };
+    map["endpoints.json"] = { chat_api: "responses" };
     const cfg = await loadConfig({ read: readerOf(map) });
     expect(cfg.endpoints.chat_base_url).toBe("");
     expect(cfg.endpoints.stt_base_url).toBe("");
@@ -69,7 +66,6 @@ describe("loadConfig — endpoints broker_base_url", () => {
   function baseEndpoints(): Record<string, unknown> {
     return {
       chat_base_url: "http://localhost:8642",
-      chat_endpoint: "/v1/responses",
       stt_base_url: "http://localhost:5517",
       tts_base_url: "http://localhost:8092",
     };
@@ -131,7 +127,6 @@ describe("loadConfig — endpoints chat_api", () => {
   function baseEndpoints(): Record<string, unknown> {
     return {
       chat_base_url: "http://localhost:8642",
-      chat_endpoint: "/v1/responses",
       stt_base_url: "http://localhost:5517",
       tts_base_url: "http://localhost:8092",
     };
@@ -149,6 +144,13 @@ describe("loadConfig — endpoints chat_api", () => {
     map["endpoints.json"] = { ...baseEndpoints(), chat_api: "chat_completions" };
     const cfg = await loadConfig({ read: readerOf(map) });
     expect(cfg.endpoints.chat_api).toBe("chat_completions");
+  });
+
+  it("chat_api: push를 그대로 보존한다", async () => {
+    const map = goodFixture();
+    map["endpoints.json"] = { ...baseEndpoints(), chat_api: "push" };
+    const cfg = await loadConfig({ read: readerOf(map) });
+    expect(cfg.endpoints.chat_api).toBe("push");
   });
 
   it("chat_api이 없으면 undefined(선택, default는 상위 레이어 소관)", async () => {
@@ -175,7 +177,6 @@ describe("loadConfig — endpoints context window", () => {
   function baseEndpoints(): Record<string, unknown> {
     return {
       chat_base_url: "http://localhost:8642",
-      chat_endpoint: "/v1/responses",
       stt_base_url: "http://localhost:5517",
       tts_base_url: "http://localhost:8092",
     };
@@ -239,7 +240,6 @@ describe("loadConfig — endpoints validation failures", () => {
     await expectEndpointsError(
       loadWith({
         chat_base_url: "http://localhost:8642",
-        chat_endpoint: "/v1/responses",
         stt_base_url: "http://localhost:5517",
         tts_base_url: "localhost:8092", // missing scheme
       }),
@@ -250,7 +250,6 @@ describe("loadConfig — endpoints validation failures", () => {
     await expectEndpointsError(
       loadWith({
         chat_base_url: "http://localhost:8642",
-        chat_endpoint: "/v1/responses",
         stt_base_url: "http://localhost:5517",
         tts_base_url: "http://localhost:8092",
         tts_model: "",
@@ -262,7 +261,6 @@ describe("loadConfig — endpoints validation failures", () => {
     await expectEndpointsError(
       loadWith({
         chat_base_url: "http://localhost:8642",
-        chat_endpoint: "/v1/responses",
         stt_base_url: "http://localhost:5517",
         tts_base_url: "http://localhost:8092",
         tts_speaker: "   ",
@@ -274,7 +272,6 @@ describe("loadConfig — endpoints validation failures", () => {
     await expectEndpointsError(
       loadWith({
         chat_base_url: "http://localhost:8642",
-        chat_endpoint: "/v1/responses",
         stt_base_url: "http://localhost:5517",
         tts_base_url: "http://localhost:8092",
         tts_max_inflight: 0,

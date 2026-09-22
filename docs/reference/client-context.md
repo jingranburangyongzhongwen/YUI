@@ -41,11 +41,12 @@ above. Otherwise it is plain text.
 ## Rendered lines
 
 Everything between the header line and the closing tag is a sequence of `key: value`
-plain-text lines built by `renderClientContext` (`src/dispatcher/client-context-text.ts`).
-One line per fact, in this fixed order — `time`, `frontmost`, `screenshot`, `body`, then
-one or more `trigger:`/`cue note:`/`agent note:`/`agent event:`/`agent detail:`/`signal:`/
-`recent:` lines depending on what fired. A line is omitted outright when its underlying
-field is absent (e.g. no `screenshot:` line when screen capture is off).
+plain-text lines built by `renderClientContext` (`src/dispatcher/backend/client-context-text.ts`).
+One line per fact, in this fixed order — `time`, `frontmost`, `screenshot`, `body`,
+`previous`, then one or more `trigger:`/`cue note:`/`agent note:`/`agent event:`/
+`agent detail:`/`signal:`/`recent:` lines depending on what fired. A line is omitted
+outright when its underlying field is absent (e.g. no `screenshot:` line when screen
+capture is off).
 
 Any field value that could contain whitespace runs, a newline, or the block's own tags (an
 app name, a window title, a cue label, an agent-hook string) is sanitized before being
@@ -137,12 +138,64 @@ last posture change (`body_state.since`), or when an agent-driven `move_to` relo
 it, which returns it to standing — it moves only when the posture itself changes or
 the avatar relocates, not when the same posture is re-affirmed.
 
+### `previous`
+
+How the last turn that tried to speak ended. The line renders only when that turn
+ended badly.
+
+```text
+previous: time_milestone.first_activity interrupted (12min ago)
+previous: user.text_submitted failed (3min ago)
+```
+
+The label is that turn's raw `event_name`, the vocabulary the event bus uses, so it
+reads `time_milestone.first_activity` where a `trigger:` headline for the same turn
+reads `milestone first_activity`. The duration is minutes since the client recorded
+the outcome. The client stores one of three values and renders two of them:
+
+1. `complete`: backend speech started and its playback ended, with TTS off as well
+   as on. The line is omitted, and storing `complete` clears whatever the turn
+   before it left behind.
+2. `interrupted`: backend speech had started and was cut by user input, the stop
+   control, voice barge-in, or a stream stall, stream error, or missing completion
+   after a delta.
+3. `failed`: the call settled in `network_drop`, `network_stall`, `http_4xx_drop`,
+   or `parse_error` before any backend speech.
+
+An `interrupted` line carries what the listener heard of the reply and what was
+still owed:
+
+```text
+previous: user.text_submitted interrupted (0min ago), spoken: "Three logs are left." unspoken: "Two of them are from yesterday."
+```
+
+1. `spoken`: the last 50 characters of the sentences whose playback had started.
+2. `unspoken`: the first 50 characters of what was left, the sentences still
+   queued and any text that had not closed a sentence.
+
+Both are plain slices of the reply, with nothing marking where they were cut.
+`unspoken` starts after the last sentence whose playback began, so a sentence
+whose synthesis failed belongs to it only when playback never reached past it; one
+the listener heard past appears in neither part. A part that is empty is left out,
+and a record with neither part renders the plain line.
+
+When two replies overlap, the line names the turn whose utterance opened most
+recently.
+
+Only the backend's own turn writes the value. The thinking filler phrases and the
+client's failure phrases leave it as it was, and so does a turn the backend answers
+with silence on a call that succeeds. The value lives in `localStorage` under
+`yui.previous-turn`, so it survives a restart of the app.
+
+The client records the outcome and renders it. What to make of a cut-off or missing
+reply is the backend's judgment.
+
 ## Trigger lines
 
 Exactly one headline `trigger: …` line describes what fired the turn, chosen by what
 the turn actually carries (screen transition, cue, single agent event, agent catchup
-burst, or a bare kind fallback); zero or more follow-up lines add detail. `trigger.kind`
-is one of `user` \| `schedule` \| `proactive` \| `agent` \| `signals`.
+burst, milestone, or a bare kind fallback); zero or more follow-up lines add detail. `trigger.kind`
+is one of `user` \| `schedule` \| `proactive` \| `agent` \| `signals` \| `milestone`.
 
 | `kind` | What fired | User content |
 |---|---|---|
@@ -151,12 +204,15 @@ is one of `user` \| `schedule` \| `proactive` \| `agent` \| `signals`.
 | `proactive` | A configured engagement cue, tap-bored cue, region-touch cue, or screen transition fired | Background marker |
 | `agent` | An external coding-agent lifecycle hook posted a completion or needs-input signal | Background marker |
 | `signals` | An external producer POSTed a burst to the `/signals` ingress | Background marker |
+| `milestone` | A once-per-day client clock fact fired on the first present tick of the local day | Background marker |
 
-For `schedule`, `proactive`, `agent`, and `signals` turns there is no user utterance —
+For `schedule`, `proactive`, `agent`, `signals`, and `milestone` turns there is no user utterance —
 the agent reads the trigger lines to decide whether and what to say. Firing a turn does
 not guarantee speech: the client renders whatever text the agent returns, and silence
-means the agent returns empty or no speech text. No client-side gate decides whether to
-speak (firing ≠ judgment).
+means the agent returns empty or no speech text. Speech text that, after trimming
+whitespace, is exactly `[SILENT]` is also a deliberate silence, equivalent to no speech
+text; `[SILENT]` inside a longer reply is ordinary text. No client-side gate decides
+whether to speak (firing ≠ judgment).
 
 ### `trigger: user message`
 
@@ -284,6 +340,20 @@ heterogeneous objects with no client-known shape, so JSON preserves their struct
 Signal lines are independent of the headline and also appear alongside a cue headline:
 `proactive.tap_bored` turns carry both their configured cue and drained signal groups.
 
+### Milestone
+
+```text
+trigger: milestone first_activity (08:12)
+signal [n8n/daily_briefing @2026-09-11T22:30:00.000Z, id daily-briefing:2026-09-11]: {"skill":"yui-daily-briefing", ...}
+```
+
+`time_milestone.first_activity` fires once per local day, on the first `os_idle_tick`
+that finds the user present with the schedule setting enabled. The headline names the
+milestone and the local clock time it fired at. The day key is latched in
+`yui.milestone-fired`, so a same-day restart fires nothing and an app left running
+overnight fires again on the first present tick after midnight. Buffered `/signals`
+groups drain into the same turn and render as `signal` lines under the headline.
+
 ## Deliberately omitted fields
 
 A few `ClientContext` fields carry no rendered line, by design:
@@ -326,6 +396,7 @@ all situational detail still lives in the trigger lines above.
 | `signals.push` | `(a new signal just arrived for you)` |
 | `signals.batch` | `(a few signals batched up for you)` |
 | `signals.catchup` | `(signals piled up while I was away)` |
+| `time_milestone.first_activity` | `(I've just started my day)` |
 | any other | `(something just caught your attention)` |
 
 The `agent.*` markers name the coding agent that fired. `agent.done` and
@@ -504,6 +575,8 @@ Body: a started oneshot (`dance`, a custom clip, `happy`, …) plays until that 
 ### What happens when text is streamed without `generate_express`?
 
 The sentence is spoken with neutral voice tone. The face eases toward neutral. A playing oneshot keeps playing until it finishes.
+
+A reply that speaks nothing and carries no cue leaves expression and motion as they are.
 
 Use no `generate_express` call when the sentence should stay neutral in face and voice.
 

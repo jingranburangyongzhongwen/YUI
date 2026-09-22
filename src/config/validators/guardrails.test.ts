@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { ATTACHMENT_LIMITS_DEFAULTS } from "../load";
 import { validateGuardrails } from "./guardrails";
 import { ConfigError } from "./shared";
 
@@ -8,9 +7,7 @@ const FILE = "guardrails.json";
 function baseRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     debounce_ms: {
-      idle_watcher: 30000,
       os_event_watcher: 5000,
-      backend_push_source: 10000,
       user_input_source: 0,
       screen_watcher: 5000,
     },
@@ -53,9 +50,7 @@ describe("validateGuardrails — happy path", () => {
   it("accepts zero debounce/rate values", () => {
     const raw = baseRaw({
       debounce_ms: {
-        idle_watcher: 0,
         os_event_watcher: 0,
-        backend_push_source: 0,
         user_input_source: 0,
         screen_watcher: 0,
       },
@@ -68,45 +63,43 @@ describe("validateGuardrails — happy path", () => {
 
 describe("validateGuardrails — top-level shape", () => {
   it("rejects non-object raw", () => {
-    expectIssue([], "객체가 아님");
-    expectIssue("x", "객체가 아님");
-    expectIssue(null, "객체가 아님");
+    expectIssue([], "not an object");
+    expectIssue("x", "not an object");
+    expectIssue(null, "not an object");
   });
 });
 
 describe("validateGuardrails — debounce_ms", () => {
   it("rejects a non-object debounce_ms", () => {
-    expectIssue(baseRaw({ debounce_ms: "nope" }), "debounce_ms는 객체여야 함");
+    expectIssue(baseRaw({ debounce_ms: "nope" }), "debounce_ms must be an object");
   });
 
   it("rejects a negative field", () => {
     expectIssue(
       baseRaw({
         debounce_ms: {
-          idle_watcher: -1,
-          os_event_watcher: 5000,
-          backend_push_source: 10000,
+          os_event_watcher: -1,
           user_input_source: 0,
           screen_watcher: 5000,
         },
       }),
-      "debounce_ms.idle_watcher는 0 이상 유한 number여야 함",
+      "debounce_ms.os_event_watcher must be a finite number >= 0",
     );
   });
 
   it("rejects a missing field (undefined fails the number check)", () => {
     expectIssue(
       baseRaw({
-        debounce_ms: { idle_watcher: 30000, os_event_watcher: 5000, backend_push_source: 10000 },
+        debounce_ms: { os_event_watcher: 5000 },
       }),
-      "debounce_ms.user_input_source는 0 이상 유한 number여야 함",
+      "debounce_ms.user_input_source must be a finite number >= 0",
     );
   });
 });
 
 describe("validateGuardrails — rate_limit", () => {
   it("rejects a non-object rate_limit", () => {
-    expectIssue(baseRaw({ rate_limit: "nope" }), "rate_limit는 객체여야 함");
+    expectIssue(baseRaw({ rate_limit: "nope" }), "rate_limit must be an object");
   });
 
   it("rejects a negative field", () => {
@@ -120,17 +113,17 @@ describe("validateGuardrails — rate_limit", () => {
           cooldown_ms: 300000,
         },
       }),
-      "rate_limit.tier2_max는 0 이상 유한 number여야 함",
+      "rate_limit.tier2_max must be a finite number >= 0",
     );
   });
 
-  it("accumulates issues for every malformed block at once (attachments defaulted)", () => {
+  it("accumulates one issue per malformed block at once", () => {
     try {
-      validateGuardrails(FILE, { debounce_ms: "y", rate_limit: "z" });
+      validateGuardrails(FILE, { debounce_ms: "y", rate_limit: "z", attachments: "w" });
       expect.unreachable("validateGuardrails should have thrown");
     } catch (e) {
       const err = e as ConfigError;
-      expect(err.issues.length).toBe(2);
+      expect(err.issues.length).toBe(3);
     }
   });
 });
@@ -144,35 +137,34 @@ describe("validateGuardrails — attachments", () => {
     expect(out.attachments).toEqual({ max_count: 3, max_image_bytes: 1024 });
   });
 
-  it("falls back to the defaults when the block is absent", () => {
+  it("names attachments when the block is absent", () => {
     const raw = baseRaw();
     delete raw.attachments;
-    expect(validateGuardrails(FILE, raw).attachments).toEqual(ATTACHMENT_LIMITS_DEFAULTS);
+    expectIssue(raw, "attachments must be an object");
   });
 
-  it("defaults the keys a partial block omits", () => {
-    const out = validateGuardrails(FILE, baseRaw({ attachments: { max_count: 3 } }));
-    expect(out.attachments).toEqual({
-      max_count: 3,
-      max_image_bytes: ATTACHMENT_LIMITS_DEFAULTS.max_image_bytes,
-    });
-  });
-
-  it("still rejects a malformed key inside a partial block", () => {
+  it("names the key a partial block omits", () => {
     expectIssue(
-      baseRaw({ attachments: { max_image_bytes: "big" } }),
-      "attachments.max_image_bytes는 0 이상 유한 number여야 함",
+      baseRaw({ attachments: { max_count: 3 } }),
+      "attachments.max_image_bytes must be a finite number >= 0",
+    );
+  });
+
+  it("rejects a malformed key", () => {
+    expectIssue(
+      baseRaw({ attachments: { max_count: 6, max_image_bytes: "big" } }),
+      "attachments.max_image_bytes must be a finite number >= 0",
     );
   });
 
   it("rejects a non-object attachments", () => {
-    expectIssue(baseRaw({ attachments: "nope" }), "attachments는 객체여야 함");
+    expectIssue(baseRaw({ attachments: "nope" }), "attachments must be an object");
   });
 
   it("rejects a negative field", () => {
     expectIssue(
       baseRaw({ attachments: { max_count: -1, max_image_bytes: 1024 } }),
-      "attachments.max_count는 0 이상 유한 number여야 함",
+      "attachments.max_count must be a finite number >= 0",
     );
   });
 });

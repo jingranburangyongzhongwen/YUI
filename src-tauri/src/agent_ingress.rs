@@ -12,7 +12,7 @@
 use crate::os_event_watcher::epoch_ms;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -153,11 +153,12 @@ pub struct AvatarRpcRequest {
 
 /// Validates and parses a raw HTTP request into an `AgentEventPayload`.
 ///
-/// Returns `Err(400)` if method is not POST, path (before any query string) is
-/// not `/agent-event`, or the body is not valid JSON for `AgentEventPayload`.
+/// Returns `Err(405)` when the method is not POST, and `Err(400)` when the path
+/// (before any query string) is not `/agent-event` or the body is not valid JSON
+/// for `AgentEventPayload`.
 fn parse_request(method: &str, path: &str, body: &str) -> Result<AgentEventPayload, u16> {
     if method != "POST" {
-        return Err(400);
+        return Err(405);
     }
     let path_only = path.split('?').next().unwrap_or(path);
     if path_only != "/agent-event" {
@@ -168,12 +169,13 @@ fn parse_request(method: &str, path: &str, body: &str) -> Result<AgentEventPaylo
 
 /// Validates and parses a raw HTTP request into a `signals` array.
 ///
-/// Returns `Err(400)` if method is not POST, path (before any query string) is
-/// not `/signals`, or the body is not valid JSON shaped `{"signals": [...]}`.
-/// Each element of `signals` is passed through as opaque JSON.
+/// Returns `Err(405)` when the method is not POST, and `Err(400)` when the path
+/// (before any query string) is not `/signals` or the body is not valid JSON
+/// shaped `{"signals": [...]}`. Each element of `signals` is passed through as
+/// opaque JSON.
 fn parse_signals_request(method: &str, path: &str, body: &str) -> Result<SignalsRequest, u16> {
     if method != "POST" {
-        return Err(400);
+        return Err(405);
     }
     let path_only = path.split('?').next().unwrap_or(path);
     if path_only != "/signals" {
@@ -184,8 +186,9 @@ fn parse_signals_request(method: &str, path: &str, body: &str) -> Result<Signals
 
 /// Validates and parses a raw HTTP request into an `AvatarRoute`.
 ///
-/// Returns `Err(404)` for an unknown `/avatar/*` path, and `Err(400)` when the path
-/// exists but the method or the command body does not fit it.
+/// Returns `Err(405)` for a known `/avatar/*` path with the wrong method, `Err(404)`
+/// for an unknown `/avatar/*` path, and `Err(400)` when the command body does not
+/// fit the route.
 fn parse_avatar_request(method: &str, path: &str, body: &str) -> Result<AvatarRoute, u16> {
     let path_only = path.split('?').next().unwrap_or(path);
     match path_only {
@@ -204,7 +207,16 @@ fn method_gate(method: &str, expected: &str) -> Result<(), u16> {
     if method == expected {
         Ok(())
     } else {
-        Err(400)
+        Err(405)
+    }
+}
+
+/// A method mismatch on an existing path is routine (reachability probes); other rejections are not.
+fn rejected_level(code: u16) -> log::Level {
+    if code == 405 {
+        log::Level::Debug
+    } else {
+        log::Level::Warn
     }
 }
 
@@ -417,7 +429,10 @@ fn handle_request(app: &AppHandle, mut request: tiny_http::Request) {
             Err(code) => {
                 let _ =
                     request.respond(tiny_http::Response::from_string("").with_status_code(code));
-                log::warn!("agent_ingress_rejected code={code} method={method} url={url}");
+                log::log!(
+                    rejected_level(code),
+                    "agent_ingress_rejected code={code} method={method} url={url}"
+                );
             }
         }
         return;
@@ -444,7 +459,10 @@ fn handle_request(app: &AppHandle, mut request: tiny_http::Request) {
         }
         Err(code) => {
             let _ = request.respond(tiny_http::Response::from_string("").with_status_code(code));
-            log::warn!("agent_ingress_rejected code={code} method={method} url={url}");
+            log::log!(
+                rejected_level(code),
+                "agent_ingress_rejected code={code} method={method} url={url}"
+            );
         }
     }
 }
@@ -455,6 +473,9 @@ fn handle_request(app: &AppHandle, mut request: tiny_http::Request) {
 /// the port within a couple of seconds.
 const BIND_ATTEMPTS: u32 = 8;
 const BIND_RETRY_DELAY: Duration = Duration::from_millis(500);
+
+/// Set while this process owns the ingress listener.
+static LISTENER_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 /// Binds the loopback listener, retrying while the port is still taken.
 fn bind_with_retry(
@@ -474,6 +495,24 @@ fn bind_with_retry(
     tiny_http::Server::http(("127.0.0.1", port))
 }
 
+/// Binds the listener unless this process already claimed it; a failed bind releases the claim.
+/// `None` means another call holds the claim.
+fn claim_and_bind(
+    claim: &AtomicBool,
+    port: u16,
+    attempts: u32,
+    delay: Duration,
+) -> Option<Result<tiny_http::Server, Box<dyn std::error::Error + Send + Sync + 'static>>> {
+    if claim.swap(true, Ordering::SeqCst) {
+        return None;
+    }
+    let result = bind_with_retry(port, attempts, delay);
+    if result.is_err() {
+        claim.store(false, Ordering::SeqCst);
+    }
+    Some(result)
+}
+
 /// Spawns the loopback HTTP listener on the given port.
 ///
 /// Bind failure after the retry window is non-fatal: the app continues without the
@@ -483,19 +522,25 @@ pub fn start(app: &AppHandle, port: u16) {
     thread::Builder::new()
         .name("agent_ingress".into())
         .spawn(move || {
-            let server = match bind_with_retry(port, BIND_ATTEMPTS, BIND_RETRY_DELAY) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::warn!("agent_ingress_bind_failed port={port} error={e}");
-                    // The bind retries span ~3.5s, so the webview is normally listening by now.
-                    if let Err(e) =
-                        app.emit(INGRESS_DEAD_CHANNEL, serde_json::json!({ "port": port }))
-                    {
-                        log::warn!("agent_ingress_dead_emit_failed error={e}");
+            let server =
+                match claim_and_bind(&LISTENER_CLAIMED, port, BIND_ATTEMPTS, BIND_RETRY_DELAY) {
+                    // A page reload calls start again while an earlier call holds the listener.
+                    None => {
+                        log::debug!("agent_ingress_start_skipped requested_port={port}");
+                        return;
                     }
-                    return;
-                }
-            };
+                    Some(Ok(s)) => s,
+                    Some(Err(e)) => {
+                        log::warn!("agent_ingress_bind_failed port={port} error={e}");
+                        // Reaches the page that is loaded when the retries end; a reload inside that window misses it.
+                        if let Err(e) =
+                            app.emit(INGRESS_DEAD_CHANNEL, serde_json::json!({ "port": port }))
+                        {
+                            log::warn!("agent_ingress_dead_emit_failed error={e}");
+                        }
+                        return;
+                    }
+                };
             log::debug!("agent_ingress_listening port={port}");
             for request in server.incoming_requests() {
                 handle_request(&app, request);
@@ -538,10 +583,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_request_wrong_method_returns_400() {
+    fn parse_request_wrong_method_returns_405() {
         assert_eq!(
             parse_request("GET", "/agent-event", valid_body()).unwrap_err(),
-            400
+            405
         );
     }
 
@@ -707,10 +752,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_signals_request_wrong_method_returns_400() {
+    fn parse_signals_request_wrong_method_returns_405() {
         assert_eq!(
             parse_signals_request("GET", "/signals", valid_signals_body()).unwrap_err(),
-            400
+            405
         );
     }
 
@@ -834,7 +879,7 @@ mod tests {
         );
         assert_eq!(
             parse_avatar_request("POST", "/avatar/state", "").unwrap_err(),
-            400
+            405
         );
     }
 
@@ -846,7 +891,7 @@ mod tests {
         );
         assert_eq!(
             parse_avatar_request("POST", "/avatar/perch-targets", "").unwrap_err(),
-            400
+            405
         );
     }
 
@@ -867,11 +912,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_avatar_known_path_wrong_method_returns_400() {
-        // The route exists, the method does not — a client error, not a missing resource.
+    fn parse_avatar_known_path_wrong_method_returns_405() {
+        // The route exists, the method does not — a method mismatch, not a missing resource.
         assert_eq!(
             parse_avatar_request("DELETE", "/avatar/state", "").unwrap_err(),
-            400
+            405
         );
     }
 
@@ -880,7 +925,7 @@ mod tests {
         assert_eq!(
             parse_avatar_request("GET", "/avatar/command", r#"{"action":"stand_down"}"#)
                 .unwrap_err(),
-            400
+            405
         );
     }
 
@@ -1013,6 +1058,15 @@ mod tests {
         );
     }
 
+    // ── rejected_level ──────────────────────────────────────────────────
+
+    #[test]
+    fn rejected_level_is_debug_for_a_method_mismatch_and_warn_otherwise() {
+        assert_eq!(rejected_level(405), log::Level::Debug);
+        assert_eq!(rejected_level(400), log::Level::Warn);
+        assert_eq!(rejected_level(404), log::Level::Warn);
+    }
+
     // ── RPC request payload ───────────────────────────────────────────────────
 
     #[test]
@@ -1109,6 +1163,42 @@ mod tests {
         let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = holder.local_addr().unwrap().port();
         assert!(bind_with_retry(port, 2, Duration::from_millis(10)).is_err());
+    }
+
+    // ── Listener claim ────────────────────────────────────────────────────
+
+    #[test]
+    fn claim_and_bind_skips_when_already_claimed() {
+        let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = holder.local_addr().unwrap().port();
+        drop(holder);
+        let claim = AtomicBool::new(true);
+        assert!(claim_and_bind(&claim, port, 1, Duration::ZERO).is_none());
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
+    }
+
+    #[test]
+    fn claim_and_bind_releases_the_claim_when_bind_fails() {
+        let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = holder.local_addr().unwrap().port();
+        let claim = AtomicBool::new(false);
+        let result = claim_and_bind(&claim, port, 2, Duration::from_millis(10));
+        assert!(matches!(result, Some(Err(_))));
+        assert!(!claim.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn claim_and_bind_keeps_the_claim_after_a_bind() {
+        let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = holder.local_addr().unwrap().port();
+        drop(holder);
+        let claim = AtomicBool::new(false);
+        assert!(matches!(
+            claim_and_bind(&claim, port, 1, Duration::ZERO),
+            Some(Ok(_))
+        ));
+        assert!(claim.load(Ordering::SeqCst));
+        assert!(claim_and_bind(&claim, port, 1, Duration::ZERO).is_none());
     }
 
     #[test]

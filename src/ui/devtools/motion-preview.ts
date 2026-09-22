@@ -12,9 +12,10 @@
  */
 
 import "./motion-preview.css";
-import { createConfigStore } from "../../config";
+import { resolveAssetUrl } from "../../config/asset-url";
+import type { AvatarConfig } from "../../config/load";
+import { createConfigStore } from "../../config/store";
 import type { EmotionId, EmotionRegistry, MotionKind, MotionRegistry } from "../../contract";
-import { resolveAssetUrl } from "../../io/asset-url";
 import { createLogger } from "../../logger";
 import { createRenderer, type RenderMotionSignal } from "../../renderer";
 
@@ -230,19 +231,16 @@ export async function mountMotionPreview(mount: HTMLElement): Promise<{ dispose(
     rows.forEach((row) => {
       const rowId = row.dataset.motionId;
       const dot = row.querySelector<HTMLSpanElement>(".dot");
-      const nameEl = row.querySelector<HTMLSpanElement>(".row-name");
       if (rowId === id) {
         row.classList.add("state-playing");
         if (dot) {
           dot.className = "dot dot-filled";
         }
-        if (nameEl) nameEl.style.color = "";
       } else {
         row.classList.remove("state-playing");
         if (dot) {
           dot.className = "dot dot-hollow";
         }
-        if (nameEl) nameEl.style.color = "";
       }
     });
   }
@@ -491,11 +489,13 @@ export async function mountMotionPreview(mount: HTMLElement): Promise<{ dispose(
 
   let motionsRegistry: MotionRegistry;
   let emotionsRegistry: EmotionRegistry;
+  let avatar: AvatarConfig;
   let vrmUrl: string;
   try {
     const config = await createConfigStore().load();
     motionsRegistry = config.motions;
     emotionsRegistry = config.emotionRegistry;
+    avatar = config.avatar;
     vrmUrl = await resolveAssetUrl(config.avatar.vrm_url);
   } catch (err) {
     log.error("registry_load_failed", { error: String(err) });
@@ -510,6 +510,9 @@ export async function mountMotionPreview(mount: HTMLElement): Promise<{ dispose(
     mount: vrmMount,
     motionRegistry: expandedRegistry,
     emotionRegistry: emotionsRegistry,
+    framing: avatar.framing,
+    gaze: avatar.gaze,
+    hitTestThreshold: avatar.hit_test.alpha_threshold,
   });
 
   // ─── Playback helpers (close over registry + renderer) ──────────────────

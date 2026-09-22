@@ -1,4 +1,4 @@
-"""Hermes middleware that appends Natsume's current desire state.
+"""Hermes middleware that appends the agent's current desire state.
 
 The cache is intentionally a single, process-local entry. Interleaved sessions may
 evict one another, and byte-identical user text may share an entry; YUI's per-turn
@@ -38,6 +38,7 @@ _TRANSPORT_LINE = re.compile(
 _LAST_SIGNAL_LINE = re.compile(
     r"last signal: \d{4}-\d{2}-\d{2} \d{2}:\d{2} — (?:answered after \d+h|no reply yet \(\d+h\))"
 )
+_SINCE_LAST_TURN_LINE = re.compile(r"since last turn: \S.*")
 _PENT_UP_LINE = re.compile(r"pent-up \((?P<count>[1-9]\d*)\):")
 _OUTBOX_LINE = re.compile(r"- \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] [^\n]*")
 _CACHE_TTL = timedelta(minutes=10)
@@ -46,6 +47,7 @@ _STATE_FILES = (
     "budget.json",
     "cursor.json",
     "monitor.json",
+    "artefacts.json",
     "outbox.jsonl",
     "audit.jsonl",
     "ticks.jsonl",
@@ -90,20 +92,24 @@ def _already_injected(text):
     if opening < 0:
         return False
     lines = stripped[opening + 1 :].split("\n")
-    if len(lines) < 5 or lines[0] != "<desire_state>" or lines[-1] != "</desire_state>":
+    if len(lines) < 6 or lines[0] != "<desire_state>" or lines[-1] != "</desire_state>":
         return False
-    drives = _DRIVES_LINE.fullmatch(lines[1])
+    if lines[1] != f"agent: {desire_state.agent_name()}":
+        return False
+    drives = _DRIVES_LINE.fullmatch(lines[2])
     if drives is None:
         return False
     for name in ("social", "curiosity", "accomplishment"):
         if desire_state.bucket(int(drives[name])) != drives[f"{name}_bucket"]:
             return False
-    if _LAST_INTERACTION_LINE.fullmatch(lines[2]) is None:
+    if _LAST_INTERACTION_LINE.fullmatch(lines[3]) is None:
         return False
-    index = 4 if _RETURNED_LINE.fullmatch(lines[3]) is not None else 3
+    index = 5 if _RETURNED_LINE.fullmatch(lines[4]) is not None else 4
     if _TRANSPORT_LINE.fullmatch(lines[index]) is None:
         return False
     index += 1
+    if _SINCE_LAST_TURN_LINE.fullmatch(lines[index]) is not None:
+        index += 1
     if _LAST_SIGNAL_LINE.fullmatch(lines[index]) is not None:
         index += 1
     if index == len(lines) - 1:
@@ -132,7 +138,7 @@ def _trigger_kind(text):
     return "none"
 
 
-def _build_desire_block(drives, outbox, transport, now, *, returned_hours=None):
+def _build_desire_block(drives, outbox, transport, now, *, returned_hours=None, unreported=()):
     levels = desire_state.drive_levels(drives, now)
     visible = desire_state.visible_outbox(outbox, now)
     block = desire_state.serialize_desire_block(
@@ -144,6 +150,7 @@ def _build_desire_block(drives, outbox, transport, now, *, returned_hours=None):
         returned_hours=returned_hours,
         last_signal_at=drives.get("last_signal_at"),
         last_signal_answered_at=drives.get("last_signal_answered_at"),
+        unreported=list(unreported),
     )
     return block, tuple(item["id"] for item in visible)
 
@@ -212,15 +219,20 @@ def _rewrite(kwargs, event):
             drives = desire_state.read_drives_snapshot(state_dir, now)
             outbox = desire_state.read_jsonl(state_dir / "outbox.jsonl")
             transport = desire_state.read_transport(state_dir)
+            artefacts = desire_state.read_artefacts(state_dir)
     else:
         drives = desire_state.default_drives(now)
         outbox = []
         transport = None
+        artefacts = None
+    unreported = artefacts["unreported"] if artefacts is not None else []
 
     staged_drives = copy.deepcopy(drives)
     trigger = _trigger_kind(original_text)
     event["trigger"] = trigger
-    interaction = trigger == "user message" or kwargs.get("platform") == "telegram"
+    platforms = desire_state.chat_platforms()
+    platform = str(kwargs.get("platform") or "").strip().lower()
+    interaction = trigger == "user message" or platform in platforms
     event["interaction"] = interaction
     interaction_changed = False
     returned_hours = None
@@ -244,7 +256,7 @@ def _rewrite(kwargs, event):
         included_ids = cached["included_ids"]
     else:
         block, included_ids = _build_desire_block(
-            staged_drives, outbox, transport, now, returned_hours=returned_hours
+            staged_drives, outbox, transport, now, returned_hours=returned_hours, unreported=unreported
         )
 
     rewritten = copy.deepcopy(request)
@@ -302,6 +314,9 @@ def _rewrite(kwargs, event):
             "last_hit": now,
         }
 
+        if new_turn and unreported:
+            _clear_unreported(state_dir, unreported)
+
         if new_turn:
             try:
                 desire_state.append_jsonl(
@@ -318,6 +333,16 @@ def _rewrite(kwargs, event):
 
     event["outcome"] = "injected"
     return {"request": rewritten, "source": "yui-desire", "reason": "desire-state"}
+
+
+def _clear_unreported(state_dir, rendered):
+    """Drop the entries this turn's block reported, keeping anything the monitor added since."""
+    current = desire_state.read_artefacts(state_dir)
+    if current is None:
+        return
+    remaining = [item for item in current["unreported"] if item not in rendered]
+    if remaining != current["unreported"]:
+        desire_state.write_json_atomic(state_dir / "artefacts.json", {**current, "unreported": remaining})
 
 
 def _safe_id(value):
@@ -362,6 +387,8 @@ def _inject(**kwargs):
     except Exception as exc:  # noqa: BLE001 - middleware must fail open for every plugin failure
         event["outcome"] = "error"
         event["reason"] = type(exc).__name__
+        if isinstance(exc, desire_state.ConfigurationError):
+            logger.error("yui-desire %s", exc)
         return None
     finally:
         _log_event(event, kwargs)

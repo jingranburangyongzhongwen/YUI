@@ -1,0 +1,51 @@
+/**
+ * Tests for src/ui/chips/tool-labels.ts — tool-id → display label lookup.
+ *
+ * Requirements:
+ * - English labels by default (tool.* keys stay English in every locale).
+ * - Known tool IDs map to specific English labels.
+ * - Unmapped tool IDs are humanized from the id (snake_case → "Title case…").
+ * - Empty tool IDs fall back to a generic "Working…" label.
+ * - getToolLabel delegates to the i18n dictionary.
+ */
+
+import { describe, expect, it } from "vitest";
+import { getToolLabel } from "./tool-labels";
+
+describe("getToolLabel (default English)", () => {
+  it("returns English label for web_search", () => {
+    expect(getToolLabel("web_search")).toBe("Searching…");
+  });
+
+  it("returns English label for browser", () => {
+    expect(getToolLabel("browser")).toBe("Browsing…");
+  });
+
+  it("returns English label for terminal", () => {
+    expect(getToolLabel("terminal")).toBe("Running…");
+  });
+
+  it("returns English label for write_file", () => {
+    expect(getToolLabel("write_file")).toBe("Writing…");
+  });
+
+  it("returns English label for pkl_to_dance", () => {
+    expect(getToolLabel("pkl_to_dance")).toBe("Learning a dance…");
+  });
+
+  it("humanizes an unmapped snake_case tool id", () => {
+    expect(getToolLabel("kb_get_ids")).toBe("Kb get ids…");
+  });
+
+  it("humanizes a single-word unmapped tool id", () => {
+    expect(getToolLabel("summarize")).toBe("Summarize…");
+  });
+
+  it("returns generic fallback for empty string tool id", () => {
+    expect(getToolLabel("")).toBe("Working…");
+  });
+
+  it("returns generic fallback when the id is only separators", () => {
+    expect(getToolLabel("___")).toBe("Working…");
+  });
+});

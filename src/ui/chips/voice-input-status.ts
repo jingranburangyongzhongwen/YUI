@@ -1,0 +1,79 @@
+import type { VoiceInputState } from "../../io/voice/stt-vad";
+
+export interface VoiceInputStatusSnapshot {
+  state: VoiceInputState;
+  detail: string;
+  visible: boolean;
+}
+
+export interface VoiceInputStatus {
+  get(): VoiceInputStatusSnapshot;
+  set(state: VoiceInputState, detail?: string): void;
+  subscribe(listener: (snapshot: VoiceInputStatusSnapshot) => void): () => void;
+  dispose(): void;
+}
+
+const STATE_COPY: Record<VoiceInputState, VoiceInputStatusSnapshot> = {
+  idle: {
+    state: "idle",
+    detail: "Voice input is off",
+    visible: false,
+  },
+  listening: {
+    state: "listening",
+    detail: "Speech active",
+    visible: true,
+  },
+  asr: {
+    state: "asr",
+    detail: "Posting audio segment",
+    visible: true,
+  },
+  fired: {
+    state: "fired",
+    detail: "Voice segment fired",
+    visible: true,
+  },
+  error: {
+    state: "error",
+    detail: "Voice input error",
+    visible: true,
+  },
+};
+
+export function createVoiceInputStatus(): VoiceInputStatus {
+  let snapshot = clone(STATE_COPY.idle);
+  const listeners = new Set<(snapshot: VoiceInputStatusSnapshot) => void>();
+
+  function notify(): void {
+    const next = clone(snapshot);
+    for (const listener of listeners) listener(next);
+  }
+
+  return {
+    get() {
+      return clone(snapshot);
+    },
+
+    set(state, detail) {
+      const next = clone(STATE_COPY[state]);
+      if (detail !== undefined) next.detail = detail;
+      if (snapshot.state === next.state && snapshot.detail === next.detail) return;
+      snapshot = next;
+      notify();
+    },
+
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+
+    dispose() {
+      listeners.clear();
+    },
+  };
+}
+
+function clone(snapshot: VoiceInputStatusSnapshot): VoiceInputStatusSnapshot {
+  return { ...snapshot };
+}

@@ -4,46 +4,60 @@
  * DOM nodes are queried directly from deps.root (entry handlers querying the same node yields the same node, so no harm).
  */
 
-import type { createAgentNotifySettings } from "../../io/agent-notify-settings";
-import { type createAgentSettings, REASONING_EFFORTS } from "../../io/agent-settings";
-import {
-  type createEndpointsSettings,
-  type EndpointOverrides,
-  isValidEndpointUrl,
-} from "../../io/endpoints-settings";
-import type { createFillerSettings } from "../../io/filler-settings";
-import type { GuardrailsSettingsStore, RateLimitOverrides } from "../../io/guardrails-settings";
+import type { DelegationItem, PushSocketState } from "../../io/chat/push-socket";
+import type { createSessionDiagnosticsStore } from "../../io/chat/session-diagnostics";
 import {
   type createLipsyncSettings,
   LIPSYNC_GAIN_MAX,
   LIPSYNC_GAIN_MIN,
-} from "../../io/lipsync-settings";
-import type { ClampedIntSettingsStore } from "../../io/persisted-store";
-import type { ScreenKnobSettingsStore, ScreenOverrides } from "../../io/screen-settings";
-import type { createScreenshotSettings } from "../../io/screenshot-settings";
-import type { createSessionDiagnosticsStore } from "../../io/session-diagnostics";
-import { type createVadSettings, VAD_SILENCE_MAX, VAD_SILENCE_MIN } from "../../io/vad-settings";
+} from "../../settings/avatar/lipsync-settings";
+import type { createAgentNotifySettings } from "../../settings/backend/agent-notify-settings";
+import { type createAgentSettings, REASONING_EFFORTS } from "../../settings/backend/agent-settings";
+import {
+  type createEndpointsSettings,
+  type EndpointOverrides,
+  isValidEndpointUrl,
+} from "../../settings/backend/endpoints-settings";
+import type {
+  GuardrailsSettingsStore,
+  RateLimitOverrides,
+} from "../../settings/backend/guardrails-settings";
+import type {
+  ScreenKnobSettingsStore,
+  ScreenOverrides,
+} from "../../settings/capture/screen-settings";
+import type { createScreenshotSettings } from "../../settings/capture/screenshot-settings";
+import type { ClampedIntSettingsStore } from "../../settings/persisted-store";
+import type { createFillerSettings } from "../../settings/voice/filler-settings";
+import {
+  type createVadSettings,
+  VAD_SILENCE_MAX,
+  VAD_SILENCE_MIN,
+} from "../../settings/voice/vad-settings";
+import { renderDelegationRows } from "../chips/delegation-rows";
+import type { VoiceInputStatusSnapshot } from "../chips/voice-input-status";
 import { getLocale, t } from "../i18n";
-import { reflectUnlessEditing } from "../reflect-unless-editing";
-import type { VoiceInputStatusSnapshot } from "../voice-input-status";
+import { reflectUnlessEditing } from "../surfaces/reflect-unless-editing";
 import {
   CHAT_API_LABEL_KEYS,
+  CHAT_APIS,
   CHAT_PRESET_CUSTOM,
   CHAT_PROVIDER_PRESETS,
   type ChatApi,
   ENDPOINT_FIELDS,
   LANG_PICKER_ORDER,
+  RATE_LIMIT_FIELDS,
   SCREEN_KNOB_FIELDS,
   SCREEN_MIN_GAP_MAX,
   SCREEN_MIN_GAP_MIN,
   type ScreenKnobFieldDef,
 } from "./constants";
-import { serializeToolLines } from "./filler-tool-lines";
+import { serializeToolLines } from "./sections/filler-tool-lines";
 import type { SwitchRow } from "./switch-row";
 
 // Format token count as "18.2K" / "18K" / "200K". Below 1000 stays as-is,
 // below 100K shows one decimal (dropping .0), 100K+ shows integer.
-export function formatTokenCount(n: number): string {
+function formatTokenCount(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
   if (k >= 100) return `${Math.round(k)}K`;
@@ -87,21 +101,20 @@ interface ReflectDeps {
   getEndpointDefaults?: () => EndpointOverrides | undefined;
   /** Bundled config default that effective chat_api falls back to when no override exists (undefined if not loaded). */
   getDefaultChatApi?: () => string | undefined;
-  /** Reactions tab numeric inputs — provided when the feature is enabled. */
-  agentPortInput?: HTMLInputElement;
-  presenceInput?: HTMLInputElement;
+  /** Push socket state for the chat section's connection line. Absent outside push mode. */
+  getPushState?: () => PushSocketState;
+  /** The delegations list the session section renders. Absent where nothing mirrors it. */
+  delegations?: {
+    get(): DelegationItem[];
+    subscribe(cb: (items: DelegationItem[]) => void): () => void;
+  };
   presenceSettings?: ClampedIntSettingsStore;
-  pacerGapInput?: HTMLInputElement;
   pacerGapSettings?: ClampedIntSettingsStore;
-  /** Rate-limit cap inputs, keyed by the cap they edit (empty when the store is absent). */
-  rateLimitInputs: ReadonlyMap<keyof RateLimitOverrides, HTMLInputElement>;
   rateLimitSettings?: GuardrailsSettingsStore;
   /** Bundled config caps a field falls back to when it carries no override (undefined if not loaded). */
   getRateLimitDefaults?: () => RateLimitOverrides | undefined;
   /** Screen-watch on/off — gates the knob group's visibility. */
   screenSettings?: { get(): { enabled: boolean } };
-  /** Screen-watch threshold inputs, keyed by the threshold they edit (empty when the store is absent). */
-  screenKnobInputs: ReadonlyMap<ScreenKnobFieldDef["key"], HTMLInputElement>;
   screenKnobSettings?: ScreenKnobSettingsStore;
   /** Bundled config thresholds a knob falls back to when it carries no override (undefined if not loaded). */
   getScreenDefaults?: () => ScreenOverrides | undefined;
@@ -122,12 +135,12 @@ export interface Reflect {
   reflectLanguage(): void;
   reflectChatType(): void;
   reflectChatPreset(): void;
+  reflectChatStatus(): void;
   reflectEndpoints(): void;
   reflectKeyRows(): void;
   reflectSession(): void;
+  reflectDelegations(): void;
   reflectVoiceStatus(snapshot: VoiceInputStatusSnapshot): void;
-  /** Effective chat API (used by reflectChatType). */
-  effectiveChatApi(): ChatApi;
 }
 
 export function createReflect(deps: ReflectDeps): Reflect {
@@ -145,16 +158,13 @@ export function createReflect(deps: ReflectDeps): Reflect {
     keyRows,
     getEndpointDefaults,
     getDefaultChatApi,
-    agentPortInput,
-    presenceInput,
+    getPushState,
+    delegations,
     presenceSettings,
-    pacerGapInput,
     pacerGapSettings,
-    rateLimitInputs,
     rateLimitSettings,
     getRateLimitDefaults,
     screenSettings,
-    screenKnobInputs,
     screenKnobSettings,
     getScreenDefaults,
   } = deps;
@@ -165,11 +175,19 @@ export function createReflect(deps: ReflectDeps): Reflect {
   const gainValue = root.querySelector<HTMLSpanElement>(".yui-lipsync-gain__value")!;
   const vadSlider = root.querySelector<HTMLInputElement>(".yui-vad__slider")!;
   const vadValue = root.querySelector<HTMLSpanElement>(".yui-vad__value")!;
-  const segEl = root.querySelector<HTMLDivElement>(".yui-field-row .yui-seg")!;
+  const segEl = root.querySelector<HTMLDivElement>(".yui-effort-seg")!;
   const segButtons = Array.from(segEl.querySelectorAll<HTMLButtonElement>(".yui-seg__btn"));
   const chatTypeEl = root.querySelector<HTMLSelectElement>(".yui-chat-type")!;
   const chatSummaryHintEl = root.querySelector<HTMLSpanElement>(".yui-chat-summary-hint")!;
   const chatPresetEl = root.querySelector<HTMLSelectElement>(".yui-chat-preset")!;
+  const chatStatusEl = root.querySelector<HTMLParagraphElement>(".yui-chat-status")!;
+  const chatStatusTextEl = chatStatusEl.querySelector<HTMLSpanElement>(".yui-chat-status__text")!;
+  const chatStatusActionEl = chatStatusEl.querySelector<HTMLButtonElement>(
+    ".yui-chat-status__action",
+  )!;
+  const chatModelRowEl = root.querySelector<HTMLDivElement>(
+    '.yui-input-row[data-ep-field="chat_model"]',
+  )!;
   const instructionsEl = root.querySelector<HTMLTextAreaElement>(".yui-textarea")!;
   const fillerLangSegEl = root.querySelector<HTMLDivElement>(".yui-filler-lang-seg");
   const fillerLangBtns = fillerLangSegEl
@@ -199,9 +217,27 @@ export function createReflect(deps: ReflectDeps): Reflect {
   }
   const sessionStatEl = root.querySelector<HTMLDivElement>(".yui-session__stat");
   const sessionValueEl = root.querySelector<HTMLSpanElement>(".yui-session__value");
+  const sessionDelegEl = root.querySelector<HTMLDivElement>(".yui-session__deleg");
+  const sessionDelegRowsEl = root.querySelector<HTMLDivElement>(".yui-session__deleg-rows");
+  const sessionDelegLostEl = root.querySelector<HTMLParagraphElement>(".yui-session__deleg-lost");
   const screenKnobsEl = root.querySelector<HTMLDivElement>(".yui-screen-knobs");
   const screenGapSlider = root.querySelector<HTMLInputElement>(".yui-screen-gap__slider");
   const screenGapValue = root.querySelector<HTMLSpanElement>(".yui-screen-gap__value");
+  // Screen-watch threshold inputs — map of input nodes by field key (empty when the store is absent).
+  const screenKnobInputs = new Map<ScreenKnobFieldDef["key"], HTMLInputElement>();
+  for (const field of SCREEN_KNOB_FIELDS) {
+    const input = root.querySelector<HTMLInputElement>(`#${field.id}`);
+    if (input) screenKnobInputs.set(field.key, input);
+  }
+  // Reactions tab numeric inputs — null or empty when the row is not rendered.
+  const agentPortInput = root.querySelector<HTMLInputElement>("#yui-agent-port");
+  const presenceInput = root.querySelector<HTMLInputElement>("#yui-presence");
+  const pacerGapInput = root.querySelector<HTMLInputElement>("#yui-pacer-gap");
+  const rateLimitInputs = new Map<keyof RateLimitOverrides, HTMLInputElement>();
+  for (const field of RATE_LIMIT_FIELDS) {
+    const input = root.querySelector<HTMLInputElement>(`#${field.id}`);
+    if (input) rateLimitInputs.set(field.key, input);
+  }
 
   function reflectSettings(): void {
     const s = settings.get();
@@ -340,27 +376,82 @@ export function createReflect(deps: ReflectDeps): Reflect {
     langSegEl.style.setProperty("--seg", String(idx));
   }
 
+  function isChatApi(v: string | undefined): v is ChatApi {
+    return v !== undefined && (CHAT_APIS as readonly string[]).includes(v);
+  }
+
   // Effective chat API — use valid override if present, else bundled default, else fall back to responses.
   function effectiveChatApi(): ChatApi {
     const ov = endpointsSettings.get().chat_api;
-    if (ov === "responses" || ov === "chat_completions") return ov;
+    if (isChatApi(ov)) return ov;
     const def = getDefaultChatApi?.();
-    return def === "chat_completions" ? "chat_completions" : "responses";
+    return isChatApi(def) ? def : "responses";
+  }
+
+  /** Where the socket stands, or undefined outside push mode and where nothing mirrors it. */
+  function pushState(): PushSocketState | undefined {
+    return effectiveChatApi() === "push" ? getPushState?.() : undefined;
   }
 
   // Chat API dropdown value + summary hint, matching effective chat_api (no subview).
+  // The model row belongs to the request-shaped modes — push carries no model of its own.
   function reflectChatType(): void {
     const eff = effectiveChatApi();
     if (chatTypeEl.value !== eff) chatTypeEl.value = eff;
     chatSummaryHintEl.textContent = t(CHAT_API_LABEL_KEYS[eff]);
+    chatModelRowEl.hidden = eff === "push";
+    reflectChatStatus();
   }
 
-  // Chat provider preset dropdown — the preset whose URL the chat_base_url override matches exactly, else Custom.
+  // Chat provider preset dropdown — the preset the current settings match, else Custom. A preset
+  // that names a protocol is matched on it; the rest are matched on the chat_base_url override.
   function reflectChatPreset(): void {
+    const api = effectiveChatApi();
     const url = endpointsSettings.get().chat_base_url.trim();
-    const match = CHAT_PROVIDER_PRESETS.find((p) => p.url === url);
+    const match = CHAT_PROVIDER_PRESETS.find((p) =>
+      p.chatApi !== undefined ? p.chatApi === api : p.url === url && api !== "push",
+    );
     const next = match ? match.id : CHAT_PRESET_CUSTOM;
     if (chatPresetEl.value !== next) chatPresetEl.value = next;
+  }
+
+  // One line under the key row: where the push socket stands, and the button that opens the
+  // socket without waiting. Hidden in the request-shaped modes.
+  function reflectChatStatus(): void {
+    const state = pushState();
+    chatStatusEl.hidden = state === undefined;
+    chatStatusEl.classList.remove("is-ready", "is-waiting", "is-failed");
+    chatStatusActionEl.hidden = true;
+    if (state === undefined) {
+      chatStatusTextEl.textContent = "";
+      return;
+    }
+    switch (state.kind) {
+      case "ready":
+        chatStatusEl.classList.add("is-ready");
+        chatStatusTextEl.textContent = t("svc.chat_status_connected", { id: state.chat_id });
+        return;
+      case "connecting":
+        chatStatusEl.classList.add("is-waiting");
+        chatStatusTextEl.textContent = t("svc.chat_status_connecting");
+        return;
+      case "reconnecting":
+        chatStatusEl.classList.add("is-waiting");
+        chatStatusTextEl.textContent = t("svc.chat_status_reconnecting", {
+          seconds: Math.ceil(state.delay_ms / 1000),
+        });
+        chatStatusActionEl.textContent = t("svc.chat_status_connect_now");
+        chatStatusActionEl.hidden = false;
+        return;
+      case "failed":
+        chatStatusEl.classList.add("is-failed");
+        chatStatusTextEl.textContent = t("svc.chat_status_refused");
+        chatStatusActionEl.textContent = t("svc.chat_status_reconnect");
+        chatStatusActionEl.hidden = false;
+        return;
+      default:
+        chatStatusTextEl.textContent = t("svc.chat_status_offline");
+    }
   }
 
   function reflectEndpoints(): void {
@@ -423,6 +514,22 @@ export function createReflect(deps: ReflectDeps): Reflect {
     }
   }
 
+  // The delegated-work list from the history; the lost line joins it while the transport is not ready.
+  const openSummaries = new Set<string>();
+  function reflectDelegations(): void {
+    if (!sessionDelegEl || !sessionDelegRowsEl || !sessionDelegLostEl || !delegations) return;
+    const state = pushState();
+    const lost = state !== undefined && state.kind !== "ready";
+    const items = delegations.get();
+    sessionDelegLostEl.hidden = !lost;
+    sessionDelegRowsEl.hidden = false;
+    sessionDelegEl.hidden = !lost && items.length === 0;
+    renderDelegationRows(sessionDelegRowsEl, items, Date.now(), {
+      open: openSummaries,
+      onToggle: reflectDelegations,
+    });
+  }
+
   function reflectVoiceStatus(snapshot: VoiceInputStatusSnapshot): void {
     const on = snapshot.state !== "idle";
     voiceSwitchBtn.setAttribute("aria-checked", String(on));
@@ -444,10 +551,11 @@ export function createReflect(deps: ReflectDeps): Reflect {
     reflectLanguage,
     reflectChatType,
     reflectChatPreset,
+    reflectChatStatus,
     reflectEndpoints,
     reflectKeyRows,
     reflectSession,
+    reflectDelegations,
     reflectVoiceStatus,
-    effectiveChatApi,
   };
 }

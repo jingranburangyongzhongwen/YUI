@@ -4,17 +4,17 @@
  * wrapping every heading-bearing settings group, persisted via sectionsSettings (yui.sections).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createExpressMotionSettings } from "../../io/express-motion-settings";
-import { createFillerSettings } from "../../io/filler-settings";
-import { createGuardrailsSettings } from "../../io/guardrails-settings";
-import { createIdleMotionSettings } from "../../io/idle-motion-settings";
-import { createFlagSettings } from "../../io/persisted-store";
-import { createScreenKnobSettings } from "../../io/screen-settings";
-import { createSectionsSettings } from "../../io/sections-settings";
-import { createSessionDiagnosticsStore } from "../../io/session-diagnostics";
-import { createSessionStore } from "../../io/session-store";
+import { createSessionDiagnosticsStore } from "../../io/chat/session-diagnostics";
+import { createSessionStore } from "../../io/chat/session-store";
+import { createExpressMotionSettings } from "../../settings/avatar/express-motion-settings";
+import { createIdleMotionSettings } from "../../settings/avatar/idle-motion-settings";
+import { createGuardrailsSettings } from "../../settings/backend/guardrails-settings";
+import { createScreenKnobSettings } from "../../settings/capture/screen-settings";
+import { createSectionsSettings } from "../../settings/panels/sections-settings";
+import { createFlagSettings } from "../../settings/persisted-store";
+import { createFillerSettings } from "../../settings/voice/filler-settings";
 import { setLocale } from "../i18n";
-import { createQuickControls } from "../quick-controls";
+import { createQuickControls } from "./quick-controls";
 import { defaultQcArgs } from "./test-helpers";
 
 const IDLE_POOL = {
@@ -144,7 +144,9 @@ describe("createQuickControls — collapsible sections", () => {
 
   it("a stored closed id renders without `open` on first paint (no flash)", () => {
     const qc = buildQc({
-      sectionsSettings: createSectionsSettings({ initial: { closed: ["vrm"] } }),
+      sectionsSettings: createSectionsSettings({
+        storage: { load: () => ({ closed: ["vrm"] }), save: () => {} },
+      }),
     });
     qc.open();
 
@@ -173,7 +175,9 @@ describe("createQuickControls — collapsible sections", () => {
   });
 
   it("reopening a section removes its id from the store", () => {
-    const sectionsSettings = createSectionsSettings({ initial: { closed: ["vrm"] } });
+    const sectionsSettings = createSectionsSettings({
+      storage: { load: () => ({ closed: ["vrm"] }), save: () => {} },
+    });
     const qc = buildQc({ sectionsSettings });
     qc.open();
 

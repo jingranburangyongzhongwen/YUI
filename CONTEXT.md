@@ -1,6 +1,6 @@
 # YUI
 
-Embodied desktop-pet frontend (the head) for the Hermes agent (the brain): it renders a VRM character, fires candidate events at the backend, and performs whatever the backend sends back. Judgment lives in the backend, so the language here is about _firing_ and _performing_, never about deciding what to say. This glossary is the canonical vocabulary; issue titles, test names, and proposals use these terms.
+Embodied desktop-pet frontend (the head) for the selected backend agent (the brain): it renders a VRM character, fires candidate events at the backend, and performs whatever the backend sends back. Judgment lives in the backend, so the language here is about _firing_ and _performing_, never about deciding what to say. This glossary is the canonical vocabulary; issue titles, test names, and proposals use these terms.
 
 ## Language
 
@@ -11,7 +11,7 @@ YUI itself — VRM rendering, sensing, and I/O surfaces. Holds no judgment.
 _Avoid_: client-side brain, frontend agent
 
 **Brain**:
-The Hermes backend — judgment, persona, memory, and the agent loop.
+The selected backend — judgment, persona, memory, and the agent loop.
 _Avoid_: server, LLM (as a component name)
 
 **Firing**:
@@ -19,12 +19,12 @@ Client-side detection that a candidate event occurred and a turn should be sent.
 _Avoid_: triggering judgment, deciding to speak
 
 **Judgment**:
-The brain's decision whether and what to speak. Silence is expressed as empty speech text, never a client-side gate.
+The brain's decision whether and what to speak. Silence is expressed as empty speech text or the bare `[SILENT]` token, never a client-side gate.
 
 ### Turn lifecycle
 
 **Turn**:
-One backend round trip, from the moment the dispatcher admits a trigger until the reply's audio has drained. A local reaction that never reaches the brain is not a Turn. See ADR-0001.
+One backend round trip, from the moment the dispatcher admits a trigger until the reply's audio has drained. A local reaction that never reaches the brain is not a Turn.
 _Avoid_: request, exchange, interaction
 
 **Trigger**:
@@ -62,7 +62,7 @@ _Avoid_: bare "broker", message broker
 ### Presence & body
 
 **Posture**:
-The character's current physical state: `standing`, `sitting`, `peeking`, or `dragging`. Sent to the brain as context.
+The character's current physical state: `standing`, `sitting`, `peeking`, `dragging`, `walking`, or `climbing`. Sent to the brain as context.
 _Avoid_: state, pose, stance
 
 **Perch**:
@@ -86,3 +86,9 @@ A burst of events from an external producer POSTed to the `/signals` ingress, fl
 
 **Mod**:
 A standalone MCP server the brain uses (avatar, browser-cdp, desktop-control, shell-sandbox). Not part of the app runtime.
+
+### Configuration
+
+**Tunable**:
+A numeric or enum knob the client reads at boot (peek distances, jump gravity, gaze curve, attachment caps). Its one home is `configs/*.json`; the validator requires the section and the consuming module reads the validated value.
+_Avoid_: default constant, fallback value, code-side default

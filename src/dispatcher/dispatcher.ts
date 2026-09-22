@@ -7,8 +7,10 @@
  *  3. conflict resolution: user.text_submitted arrives → abort in-flight backend +
  *     drop tier2/3 from the queue (superseded_by_user).
  *  4. Routing:
- *     · tier1 (drag/window/tap reactions, idle.returned) → local handling (no backend).
- *     · tier2/3 (user.text_submitted, idle.*, time_milestone.*) → backend_caller.
+ *     · tier1 (drag/window/tap/pat reactions, avatar.* gait cues, user.fall_land) → local
+ *       handling (no backend).
+ *     · tier2/3 (user.text_submitted · user.voice_segment_ready · time_milestone.* ·
+ *       proactive.* · schedule.* · agent.* · signals.*) → backend_caller.
  *
  * Single in-flight backend call. Deferred tier2/3 keeps only one item in local pending
  * (with two or more deferred, the oldest is dropped).
@@ -27,17 +29,18 @@
  */
 
 import type { PeekConfig, TapConfig } from "../config/load";
-import type { BodyState, ControlEnvelope, EmotionId, Posture } from "../contract";
-import { buildPacerSkipRecord, type PacerSkipRecord } from "../io/turn-record-log";
-import { PERCH_MOTION_ID } from "../io/window-drop-source";
+import type { BodyState, Posture } from "../contract";
+import { buildPacerSkipRecord, type PacerSkipRecord } from "../io/chat/turn-record-log";
 import type { Logger, LogLevel } from "../logger";
 import { createLogger } from "../logger";
 import type { Renderer } from "../renderer";
-import type { BackendCaller, TurnFailure, TurnOutcome } from "./backend-caller";
-import type { BusEnvelope, EventBus } from "./event-bus";
-import type { Guardrails } from "./guardrails";
-import type { ProactivePacer } from "./proactive-pacer";
-import type { TurnLog } from "./turn";
+import type { BackendCaller, TurnFailure, TurnOutcome } from "./backend/backend-caller";
+import { classify, PACED_SOURCES, type UserTurnSource, userTurnSourceOf } from "./core/classify";
+import type { BusEnvelope, EventBus } from "./core/event-bus";
+import type { Guardrails } from "./core/guardrails";
+import type { ProactivePacer } from "./core/proactive-pacer";
+import { createTier1Render } from "./core/tier1-render";
+import type { Turn, TurnLog } from "./turn/turn";
 
 const baseLog = createLogger("dispatcher");
 
@@ -58,8 +61,10 @@ interface DispatcherDeps {
   backendCaller: BackendCaller;
   /** Guardrails — debounce/rate-limit gate + cooldown verdict (pure). */
   guardrails: Guardrails;
-  /** Turn identity + admission ledger. The dispatcher begins/settles turns on it and reads busy/audio-owed state from it. */
+  /** Turn identity + admission ledger. The dispatcher begins/settles turns on it and reads busy state from it. */
   turnLog: TurnLog;
+  /** Whether the speech pipeline still owes audio — speech the backend started on its own included. */
+  hasOutstandingSpeech: () => boolean;
   /**
    * Global proactive gap. Every turn start anchors its window; a fire from a paced source
    * (see PACED_SOURCES) that arrives while it holds is dropped at the routing gate, before the
@@ -82,14 +87,19 @@ interface DispatcherDeps {
     reason: Exclude<TurnFailure, "superseded_by_user">,
     source: UserTurnSource,
   ) => void;
+  /**
+   * A backend call of any turn settled in a failure, reported with the turn it belonged to.
+   * superseded_by_user returns early and never reaches this.
+   */
+  onTurnFailed?: (turn: Turn, reason: TurnFailure) => void;
   /** Structured logging (defaults to the dispatcher namespace logger). */
   logger?: Logger;
 }
 
-type DispatcherState = "booting" | "running" | "cooldown" | "degraded" | "draining" | "stopped";
+type DispatcherState = "booting" | "running" | "cooldown" | "degraded" | "stopped";
 
 /** recent_drops entry. */
-export interface DropRecord {
+interface DropRecord {
   seq_id?: number;
   event_name: string;
   reason: TurnFailure | "guardrail_drop" | "stale_pending" | "degraded_drop" | "global_gap";
@@ -146,183 +156,6 @@ export interface Dispatcher {
   subscribePipelineBusy(cb: (busy: boolean) => void): () => void;
 }
 
-type Tier = 1 | 2 | 3;
-type Target = "tier1" | "backend_caller" | "drop";
-
-interface Classification {
-  tier: Tier;
-  target: Target;
-}
-
-/**
- * classify. Only handled events are routed; the rest are dropped (= no-op).
- * Tap reactions are handled as tier1 local events.
- */
-function classify(env: BusEnvelope): Classification {
-  const n = env.event_name;
-  if (n === "user.text_submitted" || n === "user.voice_segment_ready") {
-    return { tier: 2, target: "backend_caller" };
-  }
-  if (n === "idle.short" || n === "idle.long" || n.startsWith("time_milestone.")) {
-    return { tier: 2, target: "backend_caller" };
-  }
-  if (n.startsWith("proactive.")) {
-    return { tier: 2, target: "backend_caller" };
-  }
-  if (n.startsWith("schedule.")) {
-    return { tier: 2, target: "backend_caller" };
-  }
-  if (n.startsWith("agent.")) {
-    return { tier: 2, target: "backend_caller" };
-  }
-  if (n.startsWith("signals.")) {
-    return { tier: 2, target: "backend_caller" };
-  }
-  if (
-    n === "user.drag_start" ||
-    n === "user.drag_end" ||
-    n === "idle.returned" ||
-    n === "user.tap" ||
-    n === "user.tap_region" ||
-    n === "user.pat_start" ||
-    n === "user.pat_end" ||
-    n === "user.window_sit_enter" ||
-    n === "user.window_sit_exit" ||
-    n === "user.window_sit_drop" ||
-    n === "user.peek_drop" ||
-    n === "user.peek_exit" ||
-    n === "avatar.walk_start" ||
-    n === "avatar.walk_end" ||
-    n === "avatar.climb_start" ||
-    n === "avatar.climb_end" ||
-    n === "avatar.window_sit" ||
-    n === "avatar.jump" ||
-    n === "user.fall_land"
-  ) {
-    return { tier: 1, target: "tier1" };
-  }
-  return { tier: (env.hint_tier ?? 3) as Tier, target: "drop" };
-}
-
-/** A sit that pins the perch target: the drag drop and the ambient climb's ledge sit. */
-function isSitDrop(eventName: string): boolean {
-  return eventName === "user.window_sit_drop" || eventName === "avatar.window_sit";
-}
-
-function samePosture(a: Posture, b: Posture): boolean {
-  return (
-    a.state === b.state &&
-    a.perched_on?.app === b.perched_on?.app &&
-    a.perched_on?.window_title === b.perched_on?.window_title
-  );
-}
-
-/** Source of a user-initiated turn (typed vs voice) — filters onUserTurnFailed targets and hints routing.
- * Other triggers such as proactive/schedule/agent are undefined (§274, not a UI error-surface target). */
-export type UserTurnSource = "text" | "voice";
-
-function userTurnSourceOf(env: BusEnvelope): UserTurnSource | undefined {
-  if (env.event_name === "user.text_submitted") return "text";
-  if (env.event_name === "user.voice_segment_ready") return "voice";
-  return undefined;
-}
-
-/**
- * tier1 event → render directive mapping (local, backend-independent).
- *  - drag_start → play motion "drag" / drag_end → return to idle (motion null).
- *  - user.tap → observability only; tap_region / pat_start → payload motion.
- *  - pat_end → return to idle (motion null).
- *  - idle.returned → empty directive (hold).
- *  - avatar.walk_* → no render; the ambient walker owns the walk clip and only the posture moves.
- *  - avatar.climb_* → no render; the climber owns the climb clips and only the posture moves.
- *  - avatar.window_sit → the sit the climber reached on its own, rendered like a drop.
- *  - user.fall_land → no render; the faller owns the falling/landing clips and the posture is unchanged.
- *  - avatar.jump → no render; the jumper owns the jump clip and the posture stays walking.
- * Returning null means no render.
- */
-function tier1Directive(env: BusEnvelope, log: Logger): ControlEnvelope | null {
-  switch (env.event_name) {
-    case "user.drag_start":
-      return { speech_text: "", motion: { id: "drag" } };
-    case "user.drag_end":
-      return { speech_text: "", motion: null };
-    case "user.window_sit_enter":
-      return { speech_text: "", motion: { id: PERCH_MOTION_ID } };
-    case "user.window_sit_drop":
-    case "avatar.window_sit":
-      return { speech_text: "", motion: { id: PERCH_MOTION_ID } };
-    case "user.window_sit_exit":
-      return { speech_text: "", motion: null };
-    case "user.peek_drop":
-      return { speech_text: "", motion: { id: "peek" } };
-    case "user.peek_exit":
-      return { speech_text: "", motion: null };
-    case "user.tap":
-    case "user.fall_land":
-    case "avatar.jump":
-    case "avatar.climb_start":
-    case "avatar.climb_end":
-      return null;
-    case "user.pat_end":
-      return { speech_text: "", motion: null };
-    case "user.tap_region":
-    case "user.pat_start": {
-      const motionId = env.payload?.motion_id;
-      if (typeof motionId !== "string" || motionId.length === 0) {
-        log.warn("tap_motion.malformed", { seq_id: env.seq_id, payload: env.payload });
-        return null;
-      }
-      // emotion is enrichment, motion is primary — a malformed emotion_id degrades to motion-only.
-      const emotionId = env.payload?.emotion_id;
-      return {
-        speech_text: "",
-        motion: { id: motionId },
-        ...(typeof emotionId === "string" && emotionId.length > 0
-          ? { emotion: { id: emotionId as EmotionId } }
-          : {}),
-      };
-    }
-    case "idle.returned":
-      // empty directive (emotion/motion unset = hold).
-      return { speech_text: "" };
-    default:
-      return null;
-  }
-}
-
-interface PeekDropPayload {
-  side: "left" | "right";
-  targetLocalXpx: number;
-}
-
-function parsePeekDropPayload(env: BusEnvelope): PeekDropPayload | null {
-  const side = env.payload?.side;
-  const targetLocalXpx = env.payload?.target_local_xpx;
-  if (
-    (side !== "left" && side !== "right") ||
-    typeof targetLocalXpx !== "number" ||
-    !Number.isFinite(targetLocalXpx)
-  ) {
-    return null;
-  }
-  return { side, targetLocalXpx };
-}
-
-/**
- * Which sources the global proactive gap applies to. Loop cues, schedule and the buffered
- * inboxes (signals, agent) all push as timer_scheduler, screen transitions as screen_watcher;
- * gesture cues and typed/spoken input are the user's own doing and pass ungated. Record forces
- * a new source value to answer paced-or-not at compile time.
- */
-const PACED_SOURCES: Record<BusEnvelope["source"], boolean> = {
-  timer_scheduler: true,
-  screen_watcher: true,
-  os_event_watcher: false,
-  user_input_source: false,
-  idle_watcher: false,
-  backend_push_source: false,
-};
-
 const DEFAULT_PUMP_MS = 16;
 const MAX_DROP_RECORDS = 50;
 /** Consecutive backend call failure count — degraded is entered on reaching it. */
@@ -350,12 +183,14 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   } | null = null;
   // Consecutive backend call failure counter — superseded_by_user does not count as a failure.
   let consecutiveFailures = 0;
-  // Pending tap-emotion revert — replaced per emotion tap, cleared on stop.
-  let emotionRevertTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Whether the pat currently held applied an emotion — only then does its release revert one. */
-  let patEmotionHeld = false;
-  // Wall clock, not the frame clock — since keeps running while the window is hidden.
-  let bodyState: BodyState = { posture: { state: "standing" }, since: Date.now() };
+  const tier1 = createTier1Render({
+    renderer,
+    peekConfig: deps.peekConfig,
+    tapConfig: deps.tapConfig,
+    peek: deps.peek,
+    hasOutstandingSpeech: deps.hasOutstandingSpeech,
+    log,
+  });
 
   const stateSubscribers = new Set<(s: DispatcherState) => void>();
   const busySubscribers = new Set<(busy: boolean) => void>();
@@ -472,7 +307,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       }
       // target === "drop": no-op.
     }
-    for (const t of tier1Leftover) renderTier1(t);
+    for (const t of tier1Leftover) tier1.render(t);
   }
 
   /** Start a tier2/3 backend call (occupies in-flight). On completion, free the slot and drain one deferred item. */
@@ -495,6 +330,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         }
         if (outcome === "superseded_by_user") return;
         recordDrop(env, outcome);
+        deps.onTurnFailed?.(turn, outcome);
         noteCallFailure();
         const source = userTurnSourceOf(env);
         if (source) deps.onUserTurnFailed?.(outcome, source);
@@ -503,6 +339,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         if (openTurn?.id === turn.id) openTurn.outcome = "network_drop";
         log.error("backend_call.unexpected_error", { error: String(err) });
         recordDrop(env, "network_drop");
+        deps.onTurnFailed?.(turn, "network_drop");
         noteCallFailure();
         const source = userTurnSourceOf(env);
         if (source) deps.onUserTurnFailed?.("network_drop", source);
@@ -546,7 +383,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
   /** Hold a non-user pending turn while playback is ongoing (user supersede is immediate). */
   function shouldHoldForPlayback(head: BusEnvelope): boolean {
-    return userTurnSourceOf(head) === undefined && deps.turnLog.isAudioOwed();
+    return userTurnSourceOf(head) === undefined && deps.hasOutstandingSpeech();
   }
 
   /** tier2/3 enqueue: start immediately if in-flight is empty, otherwise defer (with two or more, drop the oldest). */
@@ -559,167 +396,6 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     // With two or more deferred, drop the oldest (stale).
     while (pending.length > 1) {
       recordDrop(pending.shift()!, "stale_pending");
-    }
-  }
-
-  /**
-   * Ease a locally applied tap emotion back to neutral after the hold —
-   * a silent backend turn never triggers the playback-end revert, so without
-   * this the face would stay on the tap emotion indefinitely.
-   */
-  function scheduleTapEmotionRevert(): void {
-    if (emotionRevertTimer !== null) clearTimeout(emotionRevertTimer);
-    // While speech is playing, the TTS cue path owns the expression; playback end/interrupt/abort each ease it to neutral.
-    emotionRevertTimer = setTimeout(() => {
-      emotionRevertTimer = null;
-      if (deps.turnLog.isAudioOwed()) return;
-      renderer.easeEmotionToNeutral();
-    }, deps.tapConfig().touch_emotion_hold_ms);
-  }
-
-  function clearTapEmotionRevert(): void {
-    if (emotionRevertTimer === null) return;
-    clearTimeout(emotionRevertTimer);
-    emotionRevertTimer = null;
-  }
-
-  /** tier1 event → renderer.applyDirective (local, backend-independent). */
-  function renderTier1(env: BusEnvelope): void {
-    const peekDrop = env.event_name === "user.peek_drop" ? parsePeekDropPayload(env) : null;
-    const sitDropEdge =
-      isSitDrop(env.event_name) &&
-      typeof env.payload?.edge_local_ypx === "number" &&
-      Number.isFinite(env.payload.edge_local_ypx)
-        ? env.payload.edge_local_ypx
-        : null;
-    if (env.event_name === "user.peek_drop" && !peekDrop) {
-      log.warn("peek_drop.malformed", { seq_id: env.seq_id, payload: env.payload });
-      return;
-    }
-    if (isSitDrop(env.event_name) && sitDropEdge === null) {
-      log.warn("perch_target.malformed", { seq_id: env.seq_id, payload: env.payload });
-      return;
-    }
-    updatePosture(env);
-    const directive = tier1Directive(env, log);
-    if (!directive) return;
-    log.info("fire", { seq_id: env.seq_id, event_name: env.event_name, tier: 1 });
-    applyPinTargets(env, peekDrop, sitDropEdge);
-    applyPeekState(env);
-    try {
-      renderer.applyDirective(directive);
-      // The pat emotion holds for the whole press — an earlier tap's revert would clip it,
-      // and only the release eases back, and only what the pat itself applied.
-      if (env.event_name === "user.pat_start") {
-        clearTapEmotionRevert();
-        patEmotionHeld = directive.emotion !== undefined;
-      } else if (env.event_name === "user.pat_end") {
-        if (patEmotionHeld) scheduleTapEmotionRevert();
-        patEmotionHeld = false;
-      } else if (env.event_name === "user.tap_region" && directive.emotion) {
-        scheduleTapEmotionRevert();
-      }
-    } catch (err) {
-      log.error("tier1.render_error", { error: String(err) });
-    }
-  }
-
-  function updatePosture(env: BusEnvelope): void {
-    const app = env.payload?.app;
-    const windowTitle = env.payload?.window_title;
-    const perched_on =
-      typeof app === "string" || typeof windowTitle === "string"
-        ? {
-            ...(typeof app === "string" ? { app } : {}),
-            ...(typeof windowTitle === "string" ? { window_title: windowTitle } : {}),
-          }
-        : undefined;
-    let next: Posture;
-    switch (env.event_name) {
-      case "user.window_sit_drop":
-      case "avatar.window_sit":
-        next = { state: "sitting", ...(perched_on ? { perched_on } : {}) };
-        break;
-      case "user.window_sit_enter":
-        next = { state: "sitting" };
-        break;
-      case "user.peek_drop":
-        next = { state: "peeking", ...(perched_on ? { perched_on } : {}) };
-        break;
-      case "user.drag_start":
-        next = { state: "dragging" };
-        break;
-      case "avatar.walk_start":
-        next = { state: "walking" };
-        break;
-      case "avatar.climb_start":
-        next = { state: "climbing" };
-        break;
-      case "user.window_sit_exit":
-      case "user.peek_exit":
-      case "user.drag_end":
-      case "avatar.walk_end":
-      case "avatar.climb_end":
-        next = { state: "standing" };
-        break;
-      default:
-        return;
-    }
-    // Re-affirming the posture already held is not a change — `since` keeps its original stamp.
-    if (samePosture(bodyState.posture, next)) return;
-    bodyState = { posture: next, since: Date.now() };
-  }
-
-  function applyPeekState(env: BusEnvelope): void {
-    if (!deps.peek) return;
-    try {
-      const operation =
-        env.event_name === "user.peek_drop"
-          ? deps.peek.enter()
-          : env.event_name === "user.peek_exit" ||
-              env.event_name === "user.drag_start" ||
-              isSitDrop(env.event_name) ||
-              env.event_name === "user.window_sit_enter"
-            ? deps.peek.exit()
-            : null;
-      void operation?.catch((err) => log.error("tier1.peek_state_error", { error: String(err) }));
-    } catch (err) {
-      log.error("tier1.peek_state_error", { error: String(err) });
-    }
-  }
-
-  function applyPinTargets(
-    env: BusEnvelope,
-    peekDrop: PeekDropPayload | null,
-    sitDropEdge: number | null,
-  ): void {
-    try {
-      if (peekDrop) {
-        renderer.setPerchTarget(null);
-        renderer.setMotionMirror(peekDrop.side === deps.peekConfig().mirror_side);
-        renderer.setPeekTarget({ targetXpx: peekDrop.targetLocalXpx });
-        return;
-      }
-
-      if (
-        env.event_name === "user.peek_exit" ||
-        env.event_name === "user.drag_start" ||
-        env.event_name.startsWith("user.window_sit_") ||
-        env.event_name === "avatar.window_sit"
-      ) {
-        renderer.setPeekTarget(null);
-        renderer.setMotionMirror(false);
-      }
-
-      if (env.event_name === "user.window_sit_exit" || env.event_name === "user.drag_start") {
-        renderer.setPerchTarget(null);
-        return;
-      }
-      if (isSitDrop(env.event_name) && sitDropEdge !== null) {
-        renderer.setPerchTarget({ edgeLocalYpx: sitDropEdge });
-      }
-    } catch (err) {
-      log.error("tier1.pin_target_error", { error: String(err) });
     }
   }
 
@@ -752,7 +428,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     const { tier, target } = classify(env);
     if (target === "tier1") {
       // tier1 is never gated (independent of guardrails/cooldown).
-      renderTier1(env);
+      tier1.render(env);
       return;
     }
     if (target === "backend_caller") {
@@ -783,7 +459,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
   /**
    * pump: drain bus every tick. Operates in running/cooldown/degraded all (tier1 always continues each).
-   * Otherwise (booting/stopped/draining) hold pending events as no-op.
+   * Otherwise (booting/stopped) hold pending events as no-op.
    */
   function pump(): void {
     if (state !== "running" && state !== "cooldown" && state !== "degraded") return;
@@ -821,7 +497,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         setInFlight(null);
       }
       pending.length = 0;
-      clearTapEmotionRevert();
+      tier1.dispose();
       setState("stopped");
     },
     queue() {
@@ -835,13 +511,13 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       return inFlight ? { trigger: inFlight.trigger, started_at: inFlight.started_at } : null;
     },
     getPosture() {
-      return bodyState.posture;
+      return tier1.getBodyState().posture;
     },
     getBodyState() {
-      return bodyState;
+      return tier1.getBodyState();
     },
     noteAvatarMoved() {
-      bodyState = { posture: { state: "standing" }, since: Date.now() };
+      tier1.noteAvatarMoved();
     },
     cancel() {
       // client-only abort: abort in-flight call + drop pending. Don't do bus sweep/tier1 render.

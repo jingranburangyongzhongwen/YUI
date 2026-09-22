@@ -1,0 +1,34 @@
+name: yui
+label: YUI
+kind: platform
+version: 0.1.0
+description: >
+  YUI (embodied VRM frontend) as a gateway platform channel. The client opens one WebSocket on
+  /ws and keeps it open: it says hello with its key and the emotion, motion and voice-tone
+  vocabulary it can render right now, then sends each turn as the rendered client_context block
+  plus the user's utterance.
+
+  The agent's final reply leaves on the same socket as ordered segments — every sentence with the
+  generate_express cues placed on it — so speech and expression arrive together and the standalone
+  Expression Broker is not in the path.
+
+  Because the socket stays open, the gateway grants this channel async delivery: a
+  delegate_task(background=true) completion comes back as a report and is spoken whenever it
+  finishes. Reports that land while the client is away wait for it and arrive together on connect.
+author: YUI
+pip_dependencies:
+  - "aiohttp>=3.12"
+provides_tools:
+  - generate_express
+provides_hooks:
+  - subagent_start
+  - subagent_stop
+  - on_stream_delta
+  - pre_tool_call
+  - post_tool_call
+requires_env: []
+optional_env:
+  - name: YUI_PLATFORM_KEY
+    description: "Key the client must present in its hello frame. Required before exposing the port beyond loopback."
+    prompt: "YUI chat API key (or empty for loopback-only)"
+    password: true

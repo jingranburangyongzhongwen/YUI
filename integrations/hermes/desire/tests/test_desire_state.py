@@ -78,6 +78,7 @@ def test_bootstrap_creates_all_defaults(state_dir, at, state_helpers):
         "issues": 0,
         "self_comments": 0,
         "prs": 0,
+        "dispatches": 0,
         "events": {},
         "pending": {},
     }
@@ -92,6 +93,61 @@ def test_bootstrap_creates_all_defaults(state_dir, at, state_helpers):
     assert (state_dir / "audit.jsonl").read_bytes() == b""
     assert (state_dir / "ticks.jsonl").read_bytes() == b""
     assert (state_dir / "state.lock").exists()
+
+
+def test_agent_name_and_profile_are_required(monkeypatch):
+    monkeypatch.delenv("DESIRE_AGENT_NAME", raising=False)
+    with pytest.raises(desire_state.ConfigurationError, match="DESIRE_AGENT_NAME"):
+        desire_state.agent_name()
+
+    monkeypatch.delenv("HERMES_PROFILE", raising=False)
+    with pytest.raises(desire_state.ConfigurationError, match="HERMES_PROFILE"):
+        desire_state.hermes_profile()
+
+
+def test_a_blank_agent_name_is_as_missing_as_an_absent_one(monkeypatch):
+    monkeypatch.setenv("DESIRE_AGENT_NAME", "   ")
+    with pytest.raises(desire_state.ConfigurationError, match="DESIRE_AGENT_NAME"):
+        desire_state.agent_name()
+
+
+@pytest.mark.parametrize("value", ["my agent", "Agent", "agent_two", "-agent", "agent/x"])
+def test_an_agent_name_outside_the_slug_shape_is_refused(monkeypatch, value):
+    monkeypatch.setenv("DESIRE_AGENT_NAME", value)
+    with pytest.raises(desire_state.ConfigurationError, match="DESIRE_AGENT_NAME"):
+        desire_state.agent_name()
+
+
+@pytest.mark.parametrize("value", ["", "  ", " , "])
+def test_the_chat_platforms_are_required(monkeypatch, value):
+    monkeypatch.setenv("DESIRE_CHAT_PLATFORMS", value)
+    with pytest.raises(desire_state.ConfigurationError, match="DESIRE_CHAT_PLATFORMS"):
+        desire_state.chat_platforms()
+
+
+def test_the_chat_platforms_are_read_as_a_list(monkeypatch):
+    monkeypatch.setenv("DESIRE_CHAT_PLATFORMS", "Discord, slack ")
+    assert desire_state.chat_platforms() == frozenset({"discord", "slack"})
+
+
+def test_every_convention_derives_from_the_agent_name(monkeypatch):
+    monkeypatch.setenv("DESIRE_AGENT_NAME", "demo")
+
+    assert desire_state.agent_name() == "demo"
+    assert desire_state.branch_prefix() == "demo/"
+    assert desire_state.issue_marker() == "<!-- from-demo -->"
+    assert desire_state.signal_source() == "demo-desire"
+    assert desire_state.cron_job_name("tick") == "demo-desire-tick"
+
+
+def test_the_desire_block_opens_by_naming_the_agent(monkeypatch, at):
+    monkeypatch.setenv("DESIRE_AGENT_NAME", "demo")
+    now = at("2026-08-25T12:00:00+09:00")
+    levels = {"social": 0.0, "curiosity": 50.0, "accomplishment": 50.0}
+
+    block = desire_state.serialize_desire_block(levels, [], now, last_interaction_at=now.isoformat())
+
+    assert block.split("\n")[:2] == ["<desire_state>", "agent: demo"]
 
 
 def test_state_dir_falls_back_to_profile(monkeypatch, tmp_path):
@@ -143,7 +199,7 @@ def test_satisfy_applies_fixed_dose_clamps_reanchors_and_audits(
     drives[drive] = {"level": 10.0, "anchor_at": now.isoformat()}
     write_json(state_dir / "drives.json", drives)
 
-    reward = desire_state.satisfy(event_type, "earned it", now)
+    reward = desire_state.satisfy(event_type, "https://example.test/pull/1", now, kind="pr")
 
     drives = read_json(state_dir / "drives.json")
     assert drives[drive] == {"level": 0.0, "anchor_at": now.isoformat()}
@@ -156,8 +212,21 @@ def test_satisfy_applies_fixed_dose_clamps_reanchors_and_audits(
         "event_type": event_type,
         "doses": {drive: dose},
         "reward": round(reward, 4),
-        "why": "earned it",
+        "ref": "https://example.test/pull/1",
+        "kind": "pr",
     }
+
+
+def test_satisfy_without_a_kind_audits_the_reference_alone(state_dir, at, state_helpers):
+    _, _, _, read_jsonl = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+
+    desire_state.satisfy("praised", "he liked the fix", now)
+
+    event = read_jsonl(state_dir / "audit.jsonl")[-1]
+    assert event["ref"] == "he liked the fix"
+    assert "kind" not in event
+    assert "why" not in event
 
 
 def test_satisfy_reward_matches_homeostatic_drive_reduction(state_dir, at, state_helpers):
@@ -217,6 +286,84 @@ def test_satisfy_reward_uses_decayed_level_and_derived_social(state_dir, at, sta
     assert drives_after["curiosity"] == {"level": 0.0, "anchor_at": now.isoformat()}
 
 
+def test_satisfy_learned_refuses_a_source_it_already_scored(state_dir, at, state_helpers):
+    _, _, read_json, read_jsonl = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    ref = "https://github.com/owner/YUI/commit/abc"
+
+    desire_state.satisfy("learned", ref, now)
+    dosed = read_json(state_dir / "drives.json")["curiosity"]["level"]
+
+    with pytest.raises(ValueError, match="already reported"):
+        desire_state.satisfy("learned", ref, now)
+
+    assert read_json(state_dir / "drives.json")["curiosity"]["level"] == dosed
+    assert read_json(state_dir / "budget.json")["events"] == {"learned": 1}
+    audit = read_jsonl(state_dir / "audit.jsonl")
+    assert sum(1 for event in audit if event["event"] == "drive_satisfied") == 1
+    assert audit[-1] == {
+        "at": now.isoformat(),
+        "event": "satisfy_repeated",
+        "event_type": "learned",
+        "ref": ref,
+    }
+    assert read_json(state_dir / "artefacts.json")["learned"] == [ref]
+
+
+def test_satisfy_learned_still_refuses_a_source_on_a_later_day(state_dir, at, state_helpers):
+    _, _, read_json, _ = state_helpers
+    ref = "docs/reference/motions.md"
+    desire_state.satisfy("learned", ref, at("2026-08-25T12:00:00+09:00"))
+    spent = read_json(state_dir / "budget.json")
+
+    with pytest.raises(ValueError, match="already reported"):
+        desire_state.satisfy("learned", ref, at("2026-08-28T12:00:00+09:00"))
+
+    assert read_json(state_dir / "budget.json") == spent
+
+
+def test_satisfy_learned_remembers_the_last_500_sources(state_dir, at, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    write_json, _, _, _ = state_helpers
+    record = desire_state.default_artefacts(now)
+    record["learned"] = [f"source {index}" for index in range(desire_state.LEARNED_MEMORY)]
+    write_json(state_dir / "artefacts.json", record)
+
+    desire_state.satisfy("learned", "one more source", now)
+
+    remembered = read_json(state_dir / "artefacts.json")["learned"]
+    assert len(remembered) == desire_state.LEARNED_MEMORY
+    assert remembered[-1] == "one more source"
+    assert remembered[0] == "source 1"
+
+
+def test_satisfy_learned_leaves_a_capped_source_reportable(state_dir, at, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    for index in range(desire_state.EVENT_DAILY_CAPS["learned"]):
+        desire_state.satisfy("learned", f"source {index}", now)
+
+    with pytest.raises(ValueError, match="over budget"):
+        desire_state.satisfy("learned", "one more source", now)
+
+    assert "one more source" not in read_json(state_dir / "artefacts.json")["learned"]
+
+    desire_state.satisfy("learned", "one more source", at("2026-08-26T12:00:00+09:00"))
+
+    assert read_json(state_dir / "artefacts.json")["learned"][-1] == "one more source"
+
+
+def test_satisfy_praised_scores_the_same_reference_again(state_dir, at, state_helpers):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+
+    desire_state.satisfy("praised", "he said the fix reads well", now)
+    desire_state.satisfy("praised", "he said the fix reads well", now)
+
+    assert read_json(state_dir / "budget.json")["events"] == {"praised": 2}
+
+
 def test_satisfy_rejects_unknown_event(state_dir, at):
     with pytest.raises(ValueError, match="unknown event: comforted"):
         desire_state.satisfy("comforted", "talked", at("2026-08-25T12:00:00+09:00"))
@@ -236,7 +383,7 @@ def test_satisfy_daily_cap_resets_at_kst_midnight(state_dir, at, state_helpers):
         "at": before_midnight.isoformat(),
         "event": "satisfy_blocked",
         "event_type": "learned",
-        "why": "one too many",
+        "ref": "one too many",
     }
 
     desire_state.satisfy("learned", "new KST day", at("2026-08-26T00:00:00+09:00"))
@@ -449,7 +596,7 @@ def test_serialize_desire_block_renders_interaction_and_transport_lines(at):
     last = (now - timedelta(hours=4, minutes=48)).isoformat()
 
     unknown = desire_state.serialize_desire_block(levels, [], now, last_interaction_at=last)
-    assert unknown.split("\n")[1:4] == [
+    assert unknown.split("\n")[2:5] == [
         "drives: social 72/100 (high) | curiosity 50/100 (mid) | accomplishment 50/100 (mid)",
         "last interaction: 2026-08-25 07:12 (4h ago)",
         "signal transport: unknown",
@@ -666,13 +813,13 @@ def test_serialize_desire_block_renders_the_returned_line_after_the_interaction_
         levels, held, now, last_interaction_at=last, transport=None, returned_hours=5
     )
 
-    assert empty_handed.split("\n")[1:5] == [
+    assert empty_handed.split("\n")[2:6] == [
         "drives: social 72/100 (high) | curiosity 50/100 (mid) | accomplishment 50/100 (mid)",
         "last interaction: 2026-08-25 07:00 (5h ago)",
         "returned: after 5h away",
         "signal transport: unknown",
     ]
-    assert holding.split("\n")[3] == "returned: after 5h away (one held note fits here)"
+    assert holding.split("\n")[4] == "returned: after 5h away (one held note fits here)"
 
 
 def test_serialize_desire_block_renders_the_last_signal_line_after_the_transport_line(at):
@@ -683,7 +830,7 @@ def test_serialize_desire_block_renders_the_last_signal_line_after_the_transport
     waiting = desire_state.serialize_desire_block(
         levels, [], now, last_interaction_at=now.isoformat(), last_signal_at=sent
     )
-    assert waiting.split("\n")[4] == "last signal: 2026-08-25 09:00 — no reply yet (3h)"
+    assert waiting.split("\n")[5] == "last signal: 2026-08-25 09:00 — no reply yet (3h)"
 
     answered = desire_state.serialize_desire_block(
         levels,
@@ -693,7 +840,86 @@ def test_serialize_desire_block_renders_the_last_signal_line_after_the_transport
         last_signal_at=sent,
         last_signal_answered_at=(now - timedelta(hours=1)).isoformat(),
     )
-    assert answered.split("\n")[4] == "last signal: 2026-08-25 09:00 — answered after 2h"
+    assert answered.split("\n")[5] == "last signal: 2026-08-25 09:00 — answered after 2h"
 
     silent = desire_state.serialize_desire_block(levels, [], now, last_interaction_at=now.isoformat())
     assert "last signal:" not in silent
+
+
+def test_serialize_desire_block_renders_the_since_last_turn_line_after_the_transport_line(at):
+    now = at("2026-08-25T12:00:00+09:00")
+    levels = {"social": 0.0, "curiosity": 50.0, "accomplishment": 50.0}
+    unreported = [
+        {"event": "progressed", "kind": "pr", "ref": "https://github.com/owner/YUI/pull/12"},
+        {"event": "shipped", "kind": "issue", "ref": "https://github.com/owner/YUI/issues/7"},
+    ]
+
+    block = desire_state.serialize_desire_block(
+        levels, [], now, last_interaction_at=now.isoformat(), unreported=unreported
+    )
+
+    assert block.split("\n")[5] == (
+        "since last turn: progressed pr https://github.com/owner/YUI/pull/12; "
+        "shipped issue https://github.com/owner/YUI/issues/7"
+    )
+    one = desire_state.serialize_desire_block(
+        levels, [], now, last_interaction_at=now.isoformat(), unreported=unreported[1:]
+    )
+    assert one.split("\n")[5] == "since last turn: shipped issue https://github.com/owner/YUI/issues/7"
+    assert "since last turn:" not in desire_state.serialize_desire_block(
+        levels, [], now, last_interaction_at=now.isoformat(), unreported=[]
+    )
+
+
+def test_since_last_turn_line_caps_the_listed_artefacts_and_drops_unknown_entries(at):
+    now = at("2026-08-25T12:00:00+09:00")
+    levels = {"social": 0.0, "curiosity": 50.0, "accomplishment": 50.0}
+    unreported = [{"event": "progressed", "kind": "skill", "ref": f"skill/{index}"} for index in range(11)]
+    unreported.append({"event": "invented", "kind": "skill", "ref": "skill/x"})
+    unreported.append({"event": "progressed", "kind": "wish", "ref": "skill/y"})
+
+    block = desire_state.serialize_desire_block(
+        levels, [], now, last_interaction_at=now.isoformat(), unreported=unreported
+    )
+
+    line = block.split("\n")[5]
+    assert line.startswith("since last turn: progressed skill skill/0; ")
+    assert line.endswith("; progressed skill skill/7; and 3 more")
+    assert "skill/x" not in line
+    assert "skill/y" not in line
+
+
+def test_read_artefacts_reports_absent_state_and_normalizes_a_partial_record(state_dir, at, state_helpers):
+    write_json, _, _, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+
+    assert desire_state.read_artefacts(state_dir) is None
+
+    write_json(
+        state_dir / "artefacts.json",
+        {
+            "seen": {"pr": ["u"]},
+            "unreported": ["bad", {"kind": "pr"}],
+            "skill_first_seen": {"a": 1, "b": "t"},
+        },
+    )
+    record = desire_state.read_artefacts(state_dir)
+    assert record["seen"] == {"pr": ["u"], "issue": [], "skill": []}
+    assert record["skill_first_seen"] == {"b": "t"}
+    assert record["bootstrapped"] == []
+    assert record["shipped"] == []
+    assert record["learned"] == []
+    assert record["unreported"] == [{"kind": "pr"}]
+
+    write_json(state_dir / "artefacts.json", ["not an object"])
+    assert desire_state.read_artefacts(state_dir) is None
+
+    assert desire_state.default_artefacts(now) == {
+        "bootstrapped_at": now.isoformat(),
+        "bootstrapped": [],
+        "seen": {"pr": [], "issue": [], "skill": []},
+        "skill_first_seen": {},
+        "shipped": [],
+        "learned": [],
+        "unreported": [],
+    }

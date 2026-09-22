@@ -17,8 +17,6 @@ const en: Record<string, string> = {
   // voice state labels
   "voice.state.idle": "Idle",
   "voice.state.listening": "Listening…",
-  "voice.state.processing": "Processing…",
-  "voice.state.speaking": "Speaking…",
   "voice.state.asr": "Transcribing…",
   "voice.state.fired": "Sent",
   "voice.state.error": "Error",
@@ -52,6 +50,11 @@ const en: Record<string, string> = {
   "input.error_open_advanced": "Open Advanced",
   "input.attach_too_many": "Too many images · up to {max} per turn",
   "input.attach_too_large": "Image too large · up to {max}MB each",
+  "input.attach_not_ready": "Can't attach yet · loading limits",
+
+  // message window name plate
+  "plate.thinking": "Thinking",
+  "plate.responding": "Responding",
 
   // chain-break (404) recovery notice
   "chain.reset_notice": "Conversation context was reset",
@@ -93,9 +96,11 @@ const en: Record<string, string> = {
   "panel.tablist_label": "Settings area",
   "panel.drag_hint": "Drag to move",
   "panel.pop_out": "Pop out to window",
+  "panel.message": "Type a message",
   "panel.close": "Close",
   "panel.rail_collapse": "Collapse sections rail",
   "panel.rail_expand": "Expand sections rail",
+  "settings.title": "YUI Settings",
   "devtools.label": "Developer Tools",
   "devtools.sub": "Inspect sent context and preview motions",
   "devtools.open": "Open",
@@ -298,11 +303,12 @@ const en: Record<string, string> = {
 
   // history tab
   "history.current": "Current conversation",
-  "history.turns": "{n} turns",
+  "history.messages": "{n} messages",
+  "history.messages_one": "1 message",
   "history.who_user": "You",
   "history.who_yui": "YUI",
   "history.empty": "Nothing has been said yet",
-  "history.foot": "Last 200 turns · stored on this device only",
+  "history.foot": "Last 200 messages · stored on this device only",
 
   // TTS output toggle
   "tts_output.label": "Voice output",
@@ -336,6 +342,14 @@ const en: Record<string, string> = {
   "svc.chat_aria": "Chat API type",
   "svc.chat_type_responses": "Responses API",
   "svc.chat_type_completions": "Chat Completions",
+  "svc.chat_type_push": "Push · persistent connection",
+  "svc.chat_status_connected": "Connected · {id}",
+  "svc.chat_status_connecting": "Connecting…",
+  "svc.chat_status_reconnecting": "Reconnecting in {seconds}s",
+  "svc.chat_status_refused": "The backend refused the key",
+  "svc.chat_status_reconnect": "Reconnect",
+  "svc.chat_status_connect_now": "Connect now",
+  "svc.chat_status_offline": "Not connected",
   "svc.chat_preset_label": "Provider",
   "svc.chat_preset_aria": "Chat provider preset",
   "svc.chat_preset_custom": "Custom",
@@ -481,6 +495,23 @@ const en: Record<string, string> = {
   "session.confirm_q": "Start over?",
   "session.confirm_go": "Start fresh",
   "session.confirm_cancel": "Cancel",
+
+  // delegations
+  "deleg.chip_running": "{n} tasks in progress",
+  "deleg.chip_running_one": "1 task in progress",
+  "deleg.chip_lost": "Connection lost",
+  "deleg.list_title": "Delegated tasks",
+  "deleg.min": "{n}m",
+  "deleg.hour_min": "{h}h {m}m",
+  "deleg.done": "Done",
+  "deleg.done_ago": "Done · {time} ago",
+  "deleg.failed": "Failed",
+  "deleg.failed_ago": "Failed · {time} ago",
+  "deleg.took": "Took {time}",
+
+  // reasoning
+  "think.chip": "Reasoning",
+  "aria.think_toggle": "Show or hide the reasoning",
 };
 
 export default en;

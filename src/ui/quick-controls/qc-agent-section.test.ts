@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { AvatarOption } from "../../config/load";
-import { createAgentSettings, INSTRUCTIONS_MAX_LEN } from "../../io/agent-settings";
-import { createEndpointsSettings } from "../../io/endpoints-settings";
-import { createLipsyncSettings } from "../../io/lipsync-settings";
-import { createProactiveSettings } from "../../io/proactive-settings";
-import { createScheduleSettings } from "../../io/schedule-settings";
-import type { createSpeakerSelection, SpeakerOption } from "../../io/speaker-selection";
-import type { createVrmSelection } from "../../io/vrm-selection";
+import type { createVrmSelection } from "../../io/assets/vrm-selection";
+import type {
+  createSpeakerSelection,
+  SpeakerOption,
+} from "../../io/voice/voices/speaker-selection";
+import { createLipsyncSettings } from "../../settings/avatar/lipsync-settings";
+import { createAgentSettings, INSTRUCTIONS_MAX_LEN } from "../../settings/backend/agent-settings";
+import { createEndpointsSettings } from "../../settings/backend/endpoints-settings";
+import { createProactiveSettings } from "../../settings/cues/proactive-settings";
+import { createScheduleSettings } from "../../settings/cues/schedule-settings";
 import { setLocale } from "../i18n";
-import { createQuickControls } from "../quick-controls";
+import { createQuickControls } from "./quick-controls";
 import {
   defaultQcArgs,
   inMemoryAgentStorage,

@@ -27,8 +27,9 @@ export type {
   MotionRegistry,
   MotionRegistryEntry,
   MotionSignal,
-  PerchTarget,
   Posture,
+  // Last turn with backend speech, as the client remembers it
+  PreviousTurn,
   // Client-only geometry (window-sit perch)
   ScreenRect,
   // Input context
@@ -39,6 +40,7 @@ export type {
   ToolStatus,
   // Dispatcher-layer metadata
   TriggerMeta,
+  TurnEnded,
   Usage,
   WindowRect,
 } from "./types";

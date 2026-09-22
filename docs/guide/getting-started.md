@@ -32,7 +32,8 @@ With Claude Code: open the repo and type `/yui-install` — the `yui-install` sk
 
 ```bash
 pnpm install
-pnpm tauri dev        # transparent desktop-pet window (recommended)
+pnpm tauri dev        # transparent desktop-pet window on port 1420 (recommended)
+pnpm tauri:dev        # same window on an auto-picked free port, so worktrees run side by side
 pnpm dev              # browser-only, no Tauri shell
 pnpm build            # production build
 ```
@@ -56,12 +57,13 @@ The bundled `Sendagaya_Shino.vrm` is what `configs/avatar.json` → `vrm_url` lo
 - **From the repo (`pnpm dev` or `pnpm tauri dev`)** — drop the file into `resources/vrms/` (gitignored except the bundled default; Vite serves `/vrms/*` from there) and point `configs/avatar.json` at it: set `vrm_url` to `/vrms/<file>.vrm` and add a matching entry to `available` (`{ "id", "label", "url", "source": "bundled" }`; `id` is limited to `[A-Za-z0-9._-]`).
 
 Per-model framing (`framing.margin`, `framing.fov`) and the hit-test alpha threshold (`hit_test.alpha_threshold`) live in `configs/avatar.json`.
+Every tunable section in that file is required — the client reads each value from it and fails the load naming any key the file leaves out.
 
 ---
 
 ## 3. Chat backend
 
-YUI supports two chat protocols, selected by `chat_api` in `configs/endpoints.json`. The shipped file sets `chat_completions`; if the key is removed the client behaves as `responses`.
+YUI supports three chat protocols, selected by `chat_api` in `configs/endpoints.json`. Options A and B work with any server that speaks the corresponding OpenAI API; `push` is a WebSocket contract for backends that deliver without a request, described in [push-transport.md](../reference/push-transport.md). The shipped file sets `chat_completions`; if the key is removed the client behaves as `responses`.
 
 ### Option A — Chat Completions mode (`"chat_api": "chat_completions"`, shipped default)
 
@@ -83,7 +85,7 @@ Backend capability still varies: a plain OpenAI-compatible server (e.g. vLLM) sp
 
 ### Option B — Responses mode (`"chat_api": "responses"`)
 
-Any backend served over the OpenAI Responses API (`/v1/responses`); the [Hermes Agent](https://github.com/nousresearch/hermes-agent) gateway is recommended. The backend agent reads YUI's vocabulary from the Expression Broker (§4) and emits cues as `generate_express` tool-calls.
+Any backend served over the OpenAI Responses API (`/v1/responses`); the [Hermes Agent](https://github.com/nousresearch/hermes-agent) gateway is one example. The backend agent reads YUI's vocabulary from the Expression Broker (§4) and emits cues as `generate_express` tool-calls.
 
 1. Stand up the backend agent with the Responses API served.
 2. Install the Expression MCP Broker (§4) **into the backend agent** so it can read the published vocabulary.
@@ -98,6 +100,18 @@ Any backend served over the OpenAI Responses API (`/v1/responses`); the [Hermes 
    "broker_base_url": "http://localhost:3201/mcp"
    ```
    The client appends `/responses` to `chat_base_url` itself.
+
+### What each chat mode carries
+
+| Feature | `chat_completions` | `responses` | `push` |
+| --- | --- | --- | --- |
+| Speech text and `generate_express` cues | yes | yes | yes |
+| Tool chip (which tool the backend is running) | yes | yes | yes |
+| Reasoning chip | — | yes, when the backend streams reasoning events | yes |
+| A reply the backend starts on its own | — | — | yes |
+| Delegation list and reports | — | — | yes |
+
+The first two modes work with any server that speaks the corresponding OpenAI API. `push` needs a backend that implements the contract in [push-transport.md](../reference/push-transport.md); the Hermes Agent integration under `integrations/hermes/` is the implementation that exists today.
 
 ### Reasoning effort
 

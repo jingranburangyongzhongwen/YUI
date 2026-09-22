@@ -18,14 +18,14 @@ Applies to all TypeScript in `src/` and all Rust in `src-tauri/src/`.
 |---|---|
 | `motion-controller.ts` | `"motion-controller"` |
 | `tts-pipeline.ts` | `"tts-pipeline"` |
-| `dispatcher/backend-caller.ts` | `"backend-caller"` |
+| `dispatcher/backend/backend-caller.ts` | `"backend-caller"` |
 
 ## Levels
 
 | Level | When to use | Examples |
 |---|---|---|
 | `error` | An operation failed in a way that is user-visible or affects state/data | `start_motion`, `backend_call.unexpected_error` |
-| `warn` | Recovered or degraded: a fallback was taken, malformed input dropped, an optional path skipped | `mouth_expression_missing`, broker poll unreachable then retried |
+| `warn` | Recovered or degraded: a fallback was taken, malformed input dropped, an optional path skipped | `mouth_expression_missing`, `rpc_threw` (one per broker outage) |
 | `info` | State transitions and lifecycle milestones | `vrm_loaded`, `state_change`, `backend_call`, `fire`, `turn` |
 | `debug` | High-frequency or per-item detail | per-segment `synth`, per-frame work, poll ticks |
 

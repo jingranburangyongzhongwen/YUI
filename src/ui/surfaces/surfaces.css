@@ -1,0 +1,864 @@
+/* YUI interaction surfaces — speech bubble · tool-status · text input.
+   "The Hearthlight" (DESIGN.md). Everything is normally gone (invisible-by-default)
+   and appears warmly only when needed (warm-when-present). Tokens in ./tokens.css. */
+
+/* ── overlay layer ──
+   Overlaps the stage (character canvas, drag region). Default pointer-events:none —
+   display surfaces (bubble·tool chip) pass clicks/drags through so the character stays grabbable.
+   Only the input restores pointer-events. (No data-tauri-drag-region on this layer → input doesn't get dragged) */
+.yui-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Own stacking context: above the canvas, guarantees z-order among surfaces */
+  isolation: isolate;
+  font-family: var(--yui-font, system-ui, -apple-system, "Segoe UI", sans-serif);
+}
+
+/* prefers-reduced-motion: soften transitions to opacity-only, drop choreography (principle ⑤) */
+@media (prefers-reduced-motion: reduce) {
+  .yui-bubble,
+  .yui-tool,
+  .yui-input {
+    transition-duration: var(--yui-dur-fast) !important;
+    transition-property: opacity !important;
+  }
+  .yui-bubble,
+  .yui-tool {
+    /* Drop only vertical slide/scale — keep horizontal centering (-50%) */
+    transform: translateX(-50%) !important;
+  }
+  .yui-bubble__caret,
+  .yui-tool__dot,
+  .yui-tool[data-state="done"] {
+    animation: none !important;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   1. Speech bubble — floating caption panel. No tail, no hard border.
+      The *only* frost backdrop location permitted by DESIGN.md (for readability).
+   ════════════════════════════════════════════════════════════ */
+.yui-bubble {
+  position: absolute;
+  /* Anchor to the bottom of the character's lower half — does not cover face/head.
+     Pixel adjustment available after build via --yui-bubble-bottom. */
+  bottom: var(--yui-bubble-bottom, 16%);
+  left: 50%;
+  transform: translate(-50%, 6px) scale(0.98);
+  width: max-content;
+  max-width: min(34ch, 78%);
+
+  padding: 0.7rem 0.95rem;
+  border-radius: var(--yui-radius);
+  background: var(--yui-scrim);
+  border: 1px solid var(--yui-edge);
+  box-shadow: var(--yui-float);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+
+  color: var(--yui-text);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  text-wrap: pretty;
+  text-shadow: var(--yui-text-shadow);
+
+  opacity: 0;
+  pointer-events: none; /* Display-only — passthrough for character drag */
+  transition:
+    opacity var(--yui-dur) var(--yui-ease),
+    transform var(--yui-dur) var(--yui-ease);
+
+  /* Long utterance height cap + internal scroll — does not grow upward over model even when overflowing. */
+  max-height: var(--yui-bubble-max-h, 34vh);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--yui-edge-strong) transparent;
+}
+
+/* Top fade appears only when scrolling due to overflow, suggesting scroll-up.
+   Short utterances (common case) show the first line intact without mask. */
+.yui-bubble.is-scrollable {
+  mask-image: linear-gradient(to bottom, transparent 0, oklch(0 0 0) 18px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, oklch(0 0 0) 18px);
+  pointer-events: auto; /* Capture wheel/scrollbar input only when overflowing — short utterances remain passthrough for drag */
+}
+
+/* Scrollbar minimization — thin, faint thumb so it doesn't look like a SaaS panel */
+.yui-bubble::-webkit-scrollbar {
+  width: 6px;
+}
+.yui-bubble::-webkit-scrollbar-track {
+  background: transparent;
+}
+.yui-bubble::-webkit-scrollbar-thumb {
+  background: var(--yui-edge-strong);
+  border-radius: 999px;
+}
+
+.yui-bubble.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+
+/* Screen-reader-only narration area — not visible on screen. */
+.yui-bubble__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* While input is open — lift the bubble above input (--yui-bubble-bottom is set to px by JS),
+   constrain height further to prevent growing downward and encroaching on input area. */
+.yui-bubble.is-above-input {
+  max-height: min(var(--yui-bubble-max-h, 34vh), 28vh);
+}
+
+/* ── Markdown inside bubble ──
+   Pack block/inline elements tightly to fit small caption panel. Remove first/last margins. */
+.yui-bubble p {
+  margin: 0.4em 0;
+}
+.yui-bubble > :first-child {
+  margin-top: 0;
+}
+.yui-bubble > :last-child {
+  margin-bottom: 0;
+}
+.yui-bubble ul,
+.yui-bubble ol {
+  margin: 0.4em 0;
+  padding-left: 1.3em;
+}
+.yui-bubble li {
+  margin: 0.12em 0;
+}
+.yui-bubble li::marker {
+  color: var(--yui-text-dim);
+}
+.yui-bubble strong {
+  font-weight: 650;
+  color: var(--yui-text);
+}
+.yui-bubble em {
+  font-style: italic;
+}
+/* Inline code — subtle scrim background, small radius. */
+.yui-bubble code {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  font-size: 0.86em;
+  padding: 0.08em 0.34em;
+  border-radius: 5px;
+  background: var(--yui-scrim);
+  border: 1px solid var(--yui-edge);
+}
+/* Code block — long lines scroll horizontally, height-capped so it doesn't cover the bubble. */
+.yui-bubble pre {
+  margin: 0.5em 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--yui-radius-row);
+  background: var(--yui-scrim);
+  border: 1px solid var(--yui-edge);
+  overflow-x: auto;
+  max-height: 16vh;
+  scrollbar-width: thin;
+  scrollbar-color: var(--yui-edge-strong) transparent;
+}
+.yui-bubble pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.84em;
+  line-height: 1.45;
+  white-space: pre;
+}
+/* Headings — scaled down near body size, preserving hierarchy in small panels. */
+.yui-bubble h1,
+.yui-bubble h2,
+.yui-bubble h3,
+.yui-bubble h4,
+.yui-bubble h5,
+.yui-bubble h6 {
+  margin: 0.5em 0 0.3em;
+  line-height: 1.25;
+  font-weight: 650;
+}
+.yui-bubble h1 {
+  font-size: 1.18em;
+}
+.yui-bubble h2 {
+  font-size: 1.1em;
+}
+.yui-bubble h3 {
+  font-size: 1.02em;
+}
+.yui-bubble h4,
+.yui-bubble h5,
+.yui-bubble h6 {
+  font-size: 0.96em;
+  color: var(--yui-text-dim);
+}
+.yui-bubble blockquote {
+  margin: 0.45em 0;
+  padding: 0.1em 0 0.1em 0.7em;
+  border-left: 2px solid var(--yui-accent-soft);
+  color: var(--yui-text-dim);
+}
+.yui-bubble hr {
+  margin: 0.6em 0;
+  border: 0;
+  border-top: 1px solid var(--yui-edge);
+}
+
+.yui-bubble__caret {
+  display: none;
+  width: 0.06em;
+  margin-left: 0.06em;
+  color: var(--yui-accent);
+  font-weight: 600;
+  /* Speech onset warmth moment — blinking amber caret */
+  animation: yui-caret-blink 1s steps(2, jump-none) infinite;
+}
+.yui-bubble.is-streaming .yui-bubble__caret {
+  display: inline;
+}
+
+@keyframes yui-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+/* ── Dismiss button — top-right corner, revealed on hover/focus ──
+   The bubble itself is pointer-events:none (drag passthrough), so this button carries its own
+   pointer target: hovering it is what puts the bubble in :hover and fades it in; an overflowing
+   (is-scrollable) bubble takes pointer events wholesale, so hovering anywhere reveals it there. */
+.yui-bubble__close {
+  position: absolute;
+  z-index: 1;
+  top: 0.25rem;
+  right: 0.25rem;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--yui-scrim-strong);
+  color: var(--yui-text-mute);
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 0;
+  transition:
+    opacity var(--yui-dur-fast) var(--yui-ease),
+    color var(--yui-dur-fast) var(--yui-ease);
+}
+
+.yui-bubble:hover .yui-bubble__close,
+.yui-bubble__close:focus-visible {
+  opacity: 1;
+}
+
+/* Held speech has no auto-fade, so its only exit stays on screen. */
+.yui-bubble.is-held .yui-bubble__close {
+  opacity: 0.55;
+}
+
+.yui-bubble__close:hover {
+  color: var(--yui-text);
+}
+
+.yui-bubble__close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--yui-accent-soft);
+}
+
+.yui-bubble__close svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+/* Clear the 18px top fade an overflowing bubble wears. */
+.yui-bubble.is-scrollable .yui-bubble__close {
+  top: 1.2rem;
+}
+
+/* ── Pop-out button — beside the dismiss button, same hover-revealed treatment ──
+   Moves speech into the message window; hidden where there is no second window. */
+.yui-bubble__pop {
+  position: absolute;
+  z-index: 1;
+  top: 0.25rem;
+  right: 1.95rem;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--yui-scrim-strong);
+  color: var(--yui-text-mute);
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 0;
+  transition:
+    opacity var(--yui-dur-fast) var(--yui-ease),
+    color var(--yui-dur-fast) var(--yui-ease);
+}
+/* display: grid beats the UA's [hidden] rule, so hide it explicitly. */
+.yui-bubble__pop[hidden] {
+  display: none;
+}
+
+.yui-bubble:hover .yui-bubble__pop,
+.yui-bubble__pop:focus-visible {
+  opacity: 1;
+}
+
+.yui-bubble.is-held .yui-bubble__pop {
+  opacity: 0.55;
+}
+
+.yui-bubble__pop:hover {
+  color: var(--yui-text);
+}
+
+.yui-bubble__pop:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--yui-accent-soft);
+}
+
+.yui-bubble.is-scrollable .yui-bubble__pop {
+  top: 1.2rem;
+}
+
+/* ── Inline markdown links (inside bubble) ──
+   Warm body color + amber-soft underline, ignite to amber on hover/focus (treatment A).
+   With pointer-events:auto, only links are clickable inside display-only bubble. */
+.yui-bubble a {
+  color: var(--yui-text);
+  text-decoration: underline;
+  text-decoration-color: var(--yui-accent-soft);
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 0.08em;
+  border-radius: 3px;
+  pointer-events: auto;
+  transition:
+    color var(--yui-dur-fast) var(--yui-ease),
+    text-decoration-color var(--yui-dur-fast) var(--yui-ease);
+}
+.yui-bubble a:hover,
+.yui-bubble a:focus-visible {
+  color: var(--yui-accent);
+  text-decoration-color: var(--yui-accent);
+}
+.yui-bubble a:focus-visible {
+  outline: 2px solid var(--yui-accent-soft);
+  outline-offset: 2px;
+}
+
+/* ── Inline markdown images (inside bubble) ──
+   Fit to body width and cap height so large images don't cover screen. Non-interactive (passthrough for drag). */
+.yui-bubble img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: 220px;
+  margin: 0.45rem 0;
+  border-radius: var(--yui-radius-img);
+  border: 1px solid var(--yui-edge);
+  pointer-events: none;
+}
+
+/* ── Broken image graceful fallback ──
+   On src failure, expose alt in small dashed box, no broken-icon sprawl. */
+.yui-bubble img.is-broken {
+  max-width: 100%;
+  width: max-content;
+  min-width: 6ch;
+  max-height: none;
+  height: auto;
+  padding: 0.5rem 0.7rem;
+  background: oklch(0.97 0.01 80 / 0.04);
+  border: 1px dashed var(--yui-edge-strong);
+  color: var(--yui-text-dim);
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+/* ════════════════════════════════════════════════════════════
+   2. Tool-status chip — low-emphasis small pill. Shown during backend tool execution.
+      No amber used (working is not a warmth moment) — warm ash + subdued dot pulse.
+   ════════════════════════════════════════════════════════════ */
+.yui-tool {
+  position: absolute;
+  top: 4%;
+  left: 50%;
+  transform: translate(-50%, 4px);
+
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.38rem 0.9rem;
+  border-radius: var(--yui-radius-chip);
+  background: var(--yui-scrim-strong);
+  border: 1px solid var(--yui-edge);
+  box-shadow: var(--yui-float);
+
+  color: var(--yui-text-dim);
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  text-shadow: var(--yui-text-shadow);
+
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--yui-dur) var(--yui-ease),
+    transform var(--yui-dur) var(--yui-ease);
+}
+/* display: inline-flex beats the UA's [hidden] rule, so hide it explicitly. */
+.yui-tool[hidden] {
+  display: none;
+}
+
+.yui-tool.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* Dismissal drifts further away (past the resting position) on a slower transition than appearance. */
+.yui-tool.is-hiding {
+  opacity: 0;
+  transform: translate(-50%, -6px);
+  transition:
+    opacity var(--yui-dur-out) ease-out,
+    transform var(--yui-dur-out) ease-out;
+}
+
+.yui-tool__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--yui-text-dim);
+  /* Subdued opacity pulse — not a spinner, no layout animation */
+  animation: yui-dot-pulse 1.4s var(--yui-ease) infinite;
+}
+
+@keyframes yui-dot-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* done — pulse dot solidifies into checkmark (rotated box + two-side border), ok green = completion. */
+.yui-tool[data-state="done"] .yui-tool__dot {
+  width: 0.34rem;
+  height: 0.6rem;
+  border-radius: 0;
+  background: transparent;
+  border: solid var(--yui-ok);
+  border-width: 0 0.13rem 0.13rem 0;
+  transform: translateY(-0.06rem) rotate(45deg);
+  animation: none;
+}
+
+/* done — the chip itself warms with a brief blink before it settles and dismisses. */
+.yui-tool[data-state="done"] {
+  color: var(--yui-text);
+  border-color: var(--yui-ok-soft);
+  animation: yui-chip-blink 0.5s var(--yui-ease) 2;
+}
+
+@keyframes yui-chip-blink {
+  0%,
+  100% {
+    box-shadow: var(--yui-float);
+  }
+  50% {
+    box-shadow:
+      var(--yui-float),
+      0 0 0 3px var(--yui-ok-soft);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   3. Text input — slim field summoned by hotkey. Slides up from bottom.
+      Amber border when active = warmth moment. Normally fully hidden.
+   ════════════════════════════════════════════════════════════ */
+.yui-input {
+  position: absolute;
+  left: 50%;
+  bottom: var(--yui-input-bottom, 4%);
+  transform: translate(-50%, 130%);
+  width: min(42ch, 84%);
+
+  display: flex;
+  flex-direction: column;
+  padding: 0.1rem;
+  border-radius: var(--yui-radius-input);
+  background: var(--yui-scrim-strong);
+  border: 1px solid var(--yui-edge);
+  box-shadow: var(--yui-float);
+
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--yui-dur) var(--yui-ease),
+    transform var(--yui-dur) var(--yui-ease),
+    border-color var(--yui-dur-fast) var(--yui-ease);
+}
+.yui-input.is-open {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto; /* Input alone receives clicks/focus */
+}
+/* Amber border ignited via focus-within (warmth moment) */
+.yui-input:focus-within,
+.yui-input.is-dragover {
+  border-color: var(--yui-accent);
+  box-shadow:
+    var(--yui-float),
+    0 0 0 1px var(--yui-accent-soft);
+}
+
+/* Attachment tray — hidden when empty */
+.yui-input__tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.4rem 0.45rem 0.1rem;
+}
+.yui-input__tray:empty {
+  display: none;
+}
+.yui-chip {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--yui-radius-img);
+  overflow: hidden;
+  border: 1px solid var(--yui-edge-strong);
+  background: var(--yui-scrim);
+}
+.yui-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.yui-chip__remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--yui-radius-chip);
+  background: oklch(0.15 0.01 70 / 0.78);
+  color: var(--yui-text);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--yui-dur-fast) var(--yui-ease);
+}
+.yui-chip__remove:hover {
+  background: var(--yui-danger);
+}
+
+/* Row — paperclip + field + controls, with errors beneath. */
+.yui-input__row {
+  display: flex;
+  flex-wrap: wrap;
+  /* Buttons ride the field's last text line; the bottom margins re-center them on the one-line field (2.43rem). */
+  align-items: flex-end;
+}
+.yui-input__attach {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-left: 0.15rem;
+  margin-bottom: calc((2.43rem - 34px) / 2);
+  border: 0;
+  border-radius: var(--yui-radius-chip);
+  background: transparent;
+  color: var(--yui-text-mute);
+  cursor: pointer;
+  transition:
+    color var(--yui-dur-fast) var(--yui-ease),
+    background var(--yui-dur-fast) var(--yui-ease);
+}
+.yui-input__attach:hover {
+  color: var(--yui-accent);
+  background: oklch(0.8 0.13 75 / 0.12);
+}
+.yui-input__attach:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.yui-input__attach:disabled:hover {
+  color: var(--yui-text-mute);
+  background: transparent;
+}
+.yui-input__attach svg {
+  width: 18px;
+  height: 18px;
+}
+
+.yui-input__field {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  display: block;
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  background: transparent;
+  color: var(--yui-text);
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  text-shadow: var(--yui-text-shadow);
+  resize: none;
+  overflow-y: auto;
+  /* 6 lines × 1.33rem + vertical padding — grows to here, then scrolls. */
+  max-height: calc(6 * 1.33rem + 1.1rem);
+  scrollbar-width: thin;
+  scrollbar-color: var(--yui-edge-strong) transparent;
+}
+.yui-input__field:focus {
+  outline: none;
+}
+.yui-input__field::placeholder {
+  color: var(--yui-text-dim);
+  opacity: 0.7;
+}
+.yui-input.is-pending .yui-input__field {
+  opacity: 0.55;
+}
+/* Processing field dimming — ignited together with send→stop toggle */
+.yui-input.is-running .yui-input__field {
+  opacity: 0.55;
+}
+
+/* ── Pop-out button — the bubble's exit, repeated in the row so a typing session
+   can move to the message window without leaving the field. ── */
+.yui-input__pop {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: calc((2.43rem - 34px) / 2);
+  border: 0;
+  border-radius: var(--yui-radius-chip);
+  background: transparent;
+  color: var(--yui-text-mute);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--yui-dur-fast) var(--yui-ease),
+    background var(--yui-dur-fast) var(--yui-ease);
+}
+/* display: grid beats the UA's [hidden] rule, so hide it explicitly. */
+.yui-input__pop[hidden] {
+  display: none;
+}
+.yui-input__pop:hover {
+  color: var(--yui-accent);
+  background: var(--yui-accent-faint);
+}
+.yui-input__pop:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--yui-accent-soft);
+}
+
+/* send/stop button — fixed width flex:0 0 auto so form doesn't reflow on icon swap */
+.yui-input__send {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 0.2rem;
+  margin-bottom: calc((2.43rem - 28px) / 2);
+
+  border: 0;
+  border-radius: calc(var(--yui-radius-input) - 3px);
+  background: transparent;
+  cursor: pointer;
+  color: var(--yui-text-mute);
+
+  transition:
+    color var(--yui-dur-fast) var(--yui-ease),
+    background-color var(--yui-dur-fast) var(--yui-ease),
+    opacity var(--yui-dur-fast) var(--yui-ease);
+}
+.yui-input__send .icon-send {
+  display: block;
+}
+.yui-input__send .icon-stop {
+  display: none;
+}
+/* hover/focus: slightly warm (not a warmth moment) */
+.yui-input__send:hover,
+.yui-input__send:focus-visible {
+  color: var(--yui-text-dim);
+  background: var(--yui-accent-faint);
+  outline: none;
+}
+/* active(pressed): amber flash — warmth moment */
+.yui-input__send:active {
+  color: var(--yui-accent);
+  background: var(--yui-accent-faint);
+}
+
+/* running/stop: icon swap + always amber */
+.yui-input.is-running .yui-input__send {
+  color: var(--yui-accent);
+  background: var(--yui-accent-faint);
+}
+.yui-input.is-running .yui-input__send .icon-send {
+  display: none;
+}
+.yui-input.is-running .yui-input__send .icon-stop {
+  display: block;
+}
+.yui-input.is-running .yui-input__send:hover,
+.yui-input.is-running .yui-input__send:focus-visible {
+  color: var(--yui-accent);
+  background: var(--yui-accent-soft);
+  outline: none;
+}
+
+.yui-input__send svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* stop icon uses fill, not stroke */
+.yui-input__send .icon-stop svg {
+  stroke: none;
+  fill: currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yui-input__send {
+    transition: none;
+  }
+}
+
+/* Inline error (send failure) — no side-stripe, text color only.
+   It takes a second flex line so its message and fix action cannot shrink the field. */
+.yui-input__error {
+  display: none;
+  order: 1;
+  flex: 1 0 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.1rem 0.6rem 0.45rem;
+  color: var(--yui-danger);
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: normal;
+}
+.yui-input.is-error .yui-input__error {
+  display: block;
+}
+
+/* In-place fix next to the error (e.g. open settings on an unconfigured backend).
+   Same inline-link treatment as the bubble: amber-soft underline igniting to amber. */
+.yui-input__error-action {
+  margin-left: 0.4rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--yui-text);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--yui-accent-soft);
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 0.08em;
+  border-radius: 3px;
+  transition:
+    color var(--yui-dur-fast) var(--yui-ease),
+    text-decoration-color var(--yui-dur-fast) var(--yui-ease);
+}
+.yui-input__error-action:hover,
+.yui-input__error-action:focus-visible {
+  color: var(--yui-accent);
+  text-decoration-color: var(--yui-accent);
+}
+.yui-input__error-action:focus-visible {
+  outline: 2px solid var(--yui-accent-soft);
+  outline-offset: 2px;
+}
+
+/* Manual dismiss at the error row's right edge — muted until hovered, so a standing
+   error still reads as text first. */
+.yui-input__error-dismiss {
+  display: inline-grid;
+  place-items: center;
+  vertical-align: middle;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-left: 0.3rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--yui-danger);
+  opacity: 0.65;
+  cursor: pointer;
+  transition: opacity var(--yui-dur-fast) var(--yui-ease);
+}
+.yui-input__error-dismiss:hover,
+.yui-input__error-dismiss:focus-visible {
+  opacity: 1;
+}
+.yui-input__error-dismiss:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--yui-accent-soft);
+}
+.yui-input__error-dismiss svg {
+  width: 0.7rem;
+  height: 0.7rem;
+  display: block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yui-input__error-action,
+  .yui-input__error-dismiss {
+    transition: none;
+  }
+}

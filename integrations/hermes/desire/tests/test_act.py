@@ -3,6 +3,7 @@ from datetime import timedelta
 from urllib.error import URLError
 
 import pytest
+from conftest import AGENT_NAME
 
 import act
 import desire_state
@@ -17,6 +18,25 @@ class Response:
 
     def __exit__(self, *args):
         return False
+
+
+def test_act_reports_a_missing_agent_name_instead_of_signalling(state_dir, at, monkeypatch, capsys):
+    monkeypatch.delenv("DESIRE_AGENT_NAME", raising=False)
+
+    exit_code = act.main(["signal", "--note", "hello"], now=at("2026-08-25T12:00:00+09:00"))
+
+    assert exit_code == 1
+    assert "DESIRE_AGENT_NAME" in capsys.readouterr().err
+    assert list(state_dir.iterdir()) == []
+
+
+def test_act_reports_a_missing_profile_on_the_skill_report(state_dir, at, monkeypatch, capsys):
+    monkeypatch.delenv("HERMES_PROFILE", raising=False)
+
+    exit_code = act.main(["report", "--skills"], now=at("2026-08-25T21:00:00+09:00"))
+
+    assert exit_code == 1
+    assert "HERMES_PROFILE" in capsys.readouterr().err
 
 
 def test_signal_post_body_matches_ingress_contract(state_dir, at, monkeypatch):
@@ -45,7 +65,7 @@ def test_signal_post_body_matches_ingress_contract(state_dir, at, monkeypatch):
     assert set(body["envelope"]) == set(rust_ingress_fixture["envelope"]) - {"extra"}
     assert body["signals"] == [{"kind": "desire", "note": "I want to explore"}]
     assert body["envelope"] == {
-        "source": "natsume-desire",
+        "source": f"{AGENT_NAME}-desire",
         "event_type": "desire.impulse",
         "delivery": "immediate",
         "event_id": body["envelope"]["event_id"],
@@ -56,32 +76,88 @@ def test_signal_post_body_matches_ingress_contract(state_dir, at, monkeypatch):
 
 def test_action_and_monitor_share_budget_caps():
     assert act.CAPS is desire_state.CAPS
-    assert desire_state.CAPS == {"signals": 3, "issues": 2, "self_comments": 1, "prs": 1}
+    assert desire_state.CAPS == {
+        "signals": 3,
+        "issues": 2,
+        "self_comments": 1,
+        "prs": 1,
+        "dispatches": 1,
+    }
 
 
 def test_satisfy_prints_event_and_reward(state_dir, at, capsys):
     result = act.main(
-        ["satisfy", "learned", "--why", "understood reward shaping"],
+        ["satisfy", "praised", "--ref", "he said the fix reads well"],
         now=at("2026-08-25T12:00:00+09:00"),
     )
 
     captured = capsys.readouterr()
     assert result == 0
-    assert captured.out == "satisfied learned reward=0.1004\n"
+    assert captured.out == "satisfied praised reward=0.0959\n"
     assert captured.err == ""
+
+
+def test_satisfy_learned_lowers_curiosity_by_its_dose(state_dir, at, state_helpers, capsys):
+    _, _, read_json, _ = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+    before = desire_state.default_drives(now)["curiosity"]["level"]
+
+    result = act.main(["satisfy", "learned", "--ref", "https://github.com/x/y/commit/abc"], now=now)
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.out.startswith("satisfied learned reward=")
+    assert captured.err == ""
+    curiosity = read_json(state_dir / "drives.json")["curiosity"]["level"]
+    assert curiosity == before - desire_state.EVENT_DOSES["learned"]["curiosity"]
+
+
+def test_satisfy_learned_refuses_a_source_reported_twice(state_dir, at, capsys):
+    now = at("2026-08-25T12:00:00+09:00")
+    ref = "https://github.com/x/y/commit/abc"
+    assert act.main(["satisfy", "learned", "--ref", ref], now=now) == 0
+    capsys.readouterr()
+
+    assert act.main(["satisfy", "learned", "--ref", ref], now=now) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"already reported: {ref}\n"
+
+
+def test_satisfy_learned_refuses_a_source_past_the_daily_cap(state_dir, at, capsys):
+    now = at("2026-08-25T12:00:00+09:00")
+    for index in range(6):
+        assert act.main(["satisfy", "learned", "--ref", f"source {index}"], now=now) == 0
+    capsys.readouterr()
+
+    assert act.main(["satisfy", "learned", "--ref", "one more source"], now=now) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "over budget: learned daily cap is 6\n"
+
+
+@pytest.mark.parametrize("event", ["progressed", "shipped"])
+def test_satisfy_refuses_the_events_the_monitor_derives(state_dir, at, event, capsys):
+    with pytest.raises(SystemExit) as failure:
+        act.main(["satisfy", event, "--ref", "self-reported"], now=at("2026-08-25T12:00:00+09:00"))
+
+    assert failure.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_satisfy_cap_exits_one_with_clear_refusal(state_dir, at, capsys):
     now = at("2026-08-25T12:00:00+09:00")
-    for index in range(6):
-        assert act.main(["satisfy", "progressed", "--why", f"step {index}"], now=now) == 0
+    for index in range(4):
+        assert act.main(["satisfy", "praised", "--ref", f"praise {index}"], now=now) == 0
     capsys.readouterr()
 
-    assert act.main(["satisfy", "progressed", "--why", "extra step"], now=now) == 1
+    assert act.main(["satisfy", "praised", "--ref", "one more"], now=now) == 1
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == "over budget: progressed daily cap is 6\n"
+    assert captured.err == "over budget: praised daily cap is 4\n"
 
 
 def test_signal_defaults_to_yui_agent_ingress_port(state_dir, at, monkeypatch):
@@ -440,6 +516,58 @@ def test_pr_release_refunds_and_commit_audits_the_url(state_dir, at, state_helpe
     }
 
 
+def test_dispatch_uses_its_own_one_per_day_budget(state_dir, at, capsys):
+    now = at("2026-08-25T12:00:00+09:00")
+    assert act.main(["dispatch", "--reserve"], now=now) == 0
+    capsys.readouterr()
+
+    assert act.main(["dispatch", "--reserve"], now=now) == 1
+
+    assert capsys.readouterr().err.strip() == "over budget"
+
+
+def test_dispatch_commit_audits_the_issue_url_and_the_model(state_dir, at, state_helpers, capsys):
+    _, _, read_json, read_jsonl = state_helpers
+    now = at("2026-08-25T12:00:00+09:00")
+
+    assert act.main(["dispatch", "--reserve"], now=now) == 0
+    released = capsys.readouterr().out.strip()
+    assert act.main(["dispatch", "--release", released], now=now) == 0
+    assert read_json(state_dir / "budget.json")["dispatches"] == 0
+
+    assert act.main(["dispatch", "--reserve"], now=now) == 0
+    committed = capsys.readouterr().out.strip()
+    assert (
+        act.main(
+            ["dispatch", "--commit", committed, "--url", "https://example.test/issues/3", "--model", "opus"],
+            now=now,
+        )
+        == 0
+    )
+
+    assert read_json(state_dir / "budget.json")["dispatches"] == 1
+    assert read_jsonl(state_dir / "audit.jsonl")[-1] == {
+        "at": now.isoformat(),
+        "event": "dispatch_started",
+        "url": "https://example.test/issues/3",
+        "model": "opus",
+        "reservation_id": committed,
+    }
+
+
+def test_dispatch_commit_requires_the_model(state_dir, at, capsys):
+    now = at("2026-08-25T12:00:00+09:00")
+    assert act.main(["dispatch", "--reserve"], now=now) == 0
+    reservation = capsys.readouterr().out.strip()
+
+    result = act.main(
+        ["dispatch", "--commit", reservation, "--url", "https://example.test/issues/3"], now=now
+    )
+
+    assert result == 1
+    assert capsys.readouterr().err.strip() == "--model is required with --commit"
+
+
 def test_report_posts_its_own_kind_without_touching_the_signal_budget(state_dir, at, state_helpers):
     _, _, read_json, read_jsonl = state_helpers
     now = at("2026-08-25T21:00:00+09:00")
@@ -453,7 +581,7 @@ def test_report_posts_its_own_kind_without_touching_the_signal_budget(state_dir,
 
     body = json.loads(calls[0].data)
     assert body["signals"] == [{"kind": "report", "note": "one pull request today"}]
-    assert body["envelope"]["source"] == "natsume-desire"
+    assert body["envelope"]["source"] == f"{AGENT_NAME}-desire"
     assert body["envelope"]["event_type"] == "desire.report"
     assert read_json(state_dir / "budget.json") == {
         "date": "2026-08-25",
@@ -461,6 +589,7 @@ def test_report_posts_its_own_kind_without_touching_the_signal_budget(state_dir,
         "issues": 0,
         "self_comments": 0,
         "prs": 0,
+        "dispatches": 0,
         "events": {},
         "pending": {},
     }

@@ -1,5 +1,5 @@
 /**
- * YUI ↔ Hermes contract — TypeScript types. These types are the wire schema source of truth.
+ * YUI ↔ backend contract — TypeScript types. These types are the wire schema source of truth.
  *
  * Transmission protocol summary:
  *  - Control signals (emotion_id/motion_id/emotion_text) arrive as arguments to the server-side
@@ -133,7 +133,7 @@ export interface Usage {
   total_tokens: number;
 }
 
-/** Derived from client observation of function_call items from native Hermes tools (not express). */
+/** Derived from client observation of function_call items from the backend's native tools (not express). */
 export interface ToolStatus {
   state: "idle" | "running" | "done" | "error";
   /** function_call name. */
@@ -158,7 +158,7 @@ export interface ControlEnvelope {
   /** Accumulated response.output_text.delta. Empty string if no utterance. */
   speech_text: string;
 
-  // --- Derived from observation of native Hermes tool function_call items ---
+  // --- Derived from observation of the backend's native tool function_call items ---
   tool_status?: ToolStatus | null;
 
   /** All ignored in v0. */
@@ -245,7 +245,7 @@ export interface CueMeta {
   idle_min?: number;
 }
 
-/** one item in a signals.kind burst. heterogeneous by design — taxonomy owned by n8n + Hermes, client forwards verbatim. */
+/** one item in a signals.kind burst. heterogeneous by design — taxonomy owned by the signal producers and the backend, client forwards verbatim. */
 export type SignalItem = Record<string, unknown>;
 
 export type SignalEnvelope = {
@@ -260,8 +260,10 @@ export type SignalGroup = { envelope?: SignalEnvelope; items: SignalItem[] };
 
 /** trigger envelope describing what fired this backend turn. */
 export interface TriggerMeta {
-  kind: "user" | "schedule" | "proactive" | "agent" | "signals";
+  kind: "user" | "schedule" | "proactive" | "agent" | "signals" | "milestone";
   cue?: CueMeta;
+  /** time_milestone.* — a once-per-day client clock fact. */
+  milestone?: { name: string; local_time: string };
   /** proactive only: Math.round(gap_ms / 60000). */
   idle_elapsed_min?: number;
   /** agent.done / agent.needs_input — single coding-agent lifecycle event. */
@@ -290,7 +292,7 @@ export interface TriggerMeta {
       ts: number;
     }>;
   };
-  /** signals.ingress — grouped opaque items forwarded from the n8n /signals ingress. */
+  /** signals.ingress — grouped opaque items forwarded from the /signals ingress. */
   signals?: SignalGroup[];
   /** proactive.screen_* — a frontmost-app transition fired this turn. */
   screen?: {
@@ -301,6 +303,20 @@ export interface TriggerMeta {
     /** app_switched transitions held back by the global pacer, oldest first. Present only when non-empty. */
     recent?: Array<{ from_app: string; to_app: string; dwell_min: number }>;
   };
+}
+
+/** How the last turn that tried to speak ended. */
+export type TurnEnded = "complete" | "interrupted" | "failed";
+
+/** The last turn that tried to speak, as the client remembers it. */
+export interface PreviousTurn {
+  event_name: string;
+  ended: TurnEnded;
+  ts: number;
+  /** Last 50 characters the user heard of a cut-off reply. */
+  spoken?: string;
+  /** First 50 characters of what that reply still owed. */
+  unspoken?: string;
 }
 
 /**
@@ -320,6 +336,8 @@ export interface ClientContext {
   };
   /** Populated on every turn; `standing` is the free-state posture. */
   body_state?: BodyState;
+  /** Present only when the last turn that tried to speak ended `interrupted` or `failed`. */
+  previous?: PreviousTurn;
   trigger: TriggerMeta;
 }
 
@@ -339,13 +357,6 @@ export interface EndpointsConfig {
    */
   chat_base_url: string;
   /**
-   * Informational / non-SDK fallback path. Default "/v1/responses", fallback "/v1/chat/completions".
-   * `""` = not configured.
-   * ⚠ SDK path (streamChat) does not use this field — determined by chat_base_url + SDK append.
-   *   Do not combine as `chat_base_url + chat_endpoint` (already has `/v1` duplication).
-   */
-  chat_endpoint: string;
-  /**
    * System nudge to send in the Responses API `instructions` field (config-driven, not hard-coded).
    * Encourages use of the generate_express tool (emotion_id/motion_id/emotion_text). Omitted if not set.
    */
@@ -357,10 +368,12 @@ export interface EndpointsConfig {
    */
   chat_model?: string;
   /**
-   * Chat protocol for YUI to use. "responses" (default, legacy) | "chat_completions" (new).
-   * If not set, streamChat operates as "responses" (backward compatible).
+   * Chat protocol for YUI to use. "responses" (default, legacy) | "chat_completions" (new) |
+   * "push" (one persistent WebSocket to `<chat_base_url>/ws`; turns go out on it, finished
+   * replies arrive on it — see docs/reference/push-transport.md). If not set, streamChat
+   * operates as "responses" (backward compatible).
    */
-  chat_api?: "responses" | "chat_completions";
+  chat_api?: "responses" | "chat_completions" | "push";
   /** Separate ASR service (OpenAI-compatible) → /audio/transcriptions. `""` = STT off. */
   stt_base_url: string;
   /** Separate TTS service (OpenAI-compatible) → /audio/speech. `""` = TTS off. */
@@ -399,10 +412,4 @@ export interface WindowRect extends ScreenRect {
   pid: number;
   /** kCGWindowNumber — stable window identity used to track the perched window across the stack. */
   windowNumber: number;
-}
-
-/** Client-only perch target handed to the renderer: which window edge the character sits on. */
-export interface PerchTarget {
-  rect: ScreenRect;
-  edge: "top";
 }

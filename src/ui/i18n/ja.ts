@@ -17,8 +17,6 @@ const ja: Record<string, string> = {
   // voice state labels
   "voice.state.idle": "待機中",
   "voice.state.listening": "聞いています…",
-  "voice.state.processing": "処理中…",
-  "voice.state.speaking": "話しています…",
   "voice.state.asr": "文字起こし中…",
   "voice.state.fired": "送信しました",
   "voice.state.error": "エラー",
@@ -51,6 +49,11 @@ const ja: Record<string, string> = {
   "input.error_open_advanced": "詳細を開く",
   "input.attach_too_many": "画像が多すぎ · 1ターン{max}枚まで",
   "input.attach_too_large": "画像が大きすぎ · 1枚{max}MBまで",
+  "input.attach_not_ready": "まだ添付できない · 上限を読み込み中",
+
+  // message window name plate
+  "plate.thinking": "考え中",
+  "plate.responding": "応答中",
 
   // chain-break (404) recovery notice
   "chain.reset_notice": "会話コンテキストがリセットされました",
@@ -93,9 +96,11 @@ const ja: Record<string, string> = {
   "panel.tablist_label": "設定エリア",
   "panel.drag_hint": "ドラッグで移動",
   "panel.pop_out": "ウィンドウに切り出す",
+  "panel.message": "メッセージを入力",
   "panel.close": "閉じる",
   "panel.rail_collapse": "セクション一覧を折りたたむ",
   "panel.rail_expand": "セクション一覧を広げる",
+  "settings.title": "YUI 設定",
   "devtools.label": "開発者ツール",
   "devtools.sub": "送信コンテキストとモーションを確認",
   "devtools.open": "開く",
@@ -299,11 +304,12 @@ const ja: Record<string, string> = {
 
   // history tab
   "history.current": "現在の会話",
-  "history.turns": "{n}ターン",
+  "history.messages": "メッセージ{n}件",
+  "history.messages_one": "メッセージ1件",
   "history.who_user": "あなた",
   "history.who_yui": "ユイ",
   "history.empty": "まだ会話がありません",
-  "history.foot": "直近200ターン · この端末にのみ保存",
+  "history.foot": "直近200件のメッセージ · この端末にのみ保存",
 
   // TTS output toggle
   "tts_output.label": "音声出力",
@@ -337,6 +343,14 @@ const ja: Record<string, string> = {
   "svc.chat_aria": "チャット API の種類",
   "svc.chat_type_responses": "Responses API",
   "svc.chat_type_completions": "Chat Completions",
+  "svc.chat_type_push": "Push · 継続接続",
+  "svc.chat_status_connected": "接続済み · {id}",
+  "svc.chat_status_connecting": "接続中…",
+  "svc.chat_status_reconnecting": "{seconds}秒後に再接続",
+  "svc.chat_status_refused": "バックエンドがキーを拒否しました",
+  "svc.chat_status_reconnect": "再接続",
+  "svc.chat_status_connect_now": "今すぐ接続",
+  "svc.chat_status_offline": "未接続",
   "svc.chat_preset_label": "プロバイダー",
   "svc.chat_preset_aria": "チャットプロバイダーのプリセット",
   "svc.chat_preset_custom": "カスタム",
@@ -480,6 +494,23 @@ const ja: Record<string, string> = {
   "session.confirm_q": "やり直しますか？",
   "session.confirm_go": "新しく始める",
   "session.confirm_cancel": "キャンセル",
+
+  // delegations
+  "deleg.chip_running": "作業{n}件を実行中",
+  "deleg.chip_running_one": "作業1件を実行中",
+  "deleg.chip_lost": "接続が切れました",
+  "deleg.list_title": "委任した作業",
+  "deleg.min": "{n}分",
+  "deleg.hour_min": "{h}時間{m}分",
+  "deleg.done": "完了",
+  "deleg.done_ago": "完了 · {time}前",
+  "deleg.failed": "失敗",
+  "deleg.failed_ago": "失敗 · {time}前",
+  "deleg.took": "所要 {time}",
+
+  // reasoning
+  "think.chip": "思考",
+  "aria.think_toggle": "思考の表示・非表示",
 };
 
 export default ja;

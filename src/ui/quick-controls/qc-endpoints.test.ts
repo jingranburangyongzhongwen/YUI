@@ -1,17 +1,23 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { AvatarOption } from "../../config/load";
-import { createAgentSettings } from "../../io/agent-settings";
-import { createSttKeySettings, createTtsKeySettings } from "../../io/api-key-settings";
-import { createChatKeySettings } from "../../io/chat-key-settings";
-import { createEndpointsSettings } from "../../io/endpoints-settings";
-import { createLipsyncSettings } from "../../io/lipsync-settings";
-import { createProactiveSettings } from "../../io/proactive-settings";
-import { createScheduleSettings } from "../../io/schedule-settings";
-import type { createSpeakerSelection, SpeakerOption } from "../../io/speaker-selection";
-import type { createVrmSelection } from "../../io/vrm-selection";
+import type { createVrmSelection } from "../../io/assets/vrm-selection";
+import type {
+  createSpeakerSelection,
+  SpeakerOption,
+} from "../../io/voice/voices/speaker-selection";
+import { createLipsyncSettings } from "../../settings/avatar/lipsync-settings";
+import { createAgentSettings } from "../../settings/backend/agent-settings";
+import {
+  createSttKeySettings,
+  createTtsKeySettings,
+} from "../../settings/backend/api-key-settings";
+import { createChatKeySettings } from "../../settings/backend/chat-key-settings";
+import { createEndpointsSettings } from "../../settings/backend/endpoints-settings";
+import { createProactiveSettings } from "../../settings/cues/proactive-settings";
+import { createScheduleSettings } from "../../settings/cues/schedule-settings";
 import { setLocale, t } from "../i18n";
-import { createQuickControls } from "../quick-controls";
+import { createQuickControls } from "./quick-controls";
 import {
   defaultQcArgs,
   inMemoryAgentStorage,
@@ -715,7 +721,7 @@ describe("createQuickControls — endpoints + API keys", () => {
     return qc.el.querySelector<HTMLSelectElement>(".yui-chat-type")!;
   }
 
-  it("renders an interactive Chat-API dropdown (responses/chat_completions) in the Chat section", () => {
+  it("renders an interactive Chat-API dropdown (responses/chat_completions/push) in the Chat section", () => {
     const qc = buildQc({ getDefaultChatApi: () => "responses" });
     qc.open();
 
@@ -726,7 +732,11 @@ describe("createQuickControls — endpoints + API keys", () => {
     );
     expect(sel.classList.contains("yui-select--single")).toBe(false);
     expect(sel.disabled).toBe(false);
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(["responses", "chat_completions"]);
+    expect(Array.from(sel.options).map((o) => o.value)).toEqual([
+      "responses",
+      "chat_completions",
+      "push",
+    ]);
 
     qc.dispose();
   });
@@ -810,6 +820,7 @@ describe("createQuickControls — endpoints + API keys", () => {
     expect(sel.disabled).toBe(false);
     expect(Array.from(sel.options).map((o) => o.value)).toEqual([
       ...PRESET_URLS.map(([id]) => id),
+      "hermes",
       "custom",
     ]);
     // Brand names are not localized.
@@ -818,6 +829,7 @@ describe("createQuickControls — endpoints + API keys", () => {
       "Ollama",
       "LM Studio",
       "Groq",
+      "Hermes Agent",
       t("svc.chat_preset_custom"),
     ]);
 
@@ -826,7 +838,7 @@ describe("createQuickControls — endpoints + API keys", () => {
 
   it("selecting a provider preset fills the chat base URL field and commits the override", () => {
     for (const [id, url] of PRESET_URLS) {
-      endpointsSettings.reset();
+      endpointsSettings.set({ chat_base_url: "", chat_model: "", chat_api: "" });
       const qc = buildQc();
       qc.open();
 
@@ -966,7 +978,7 @@ describe("createQuickControls — endpoints + API keys", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }
     // Every intermediate prefix would otherwise reach the store, and each store change retargets
-    // the broker client (bootstrap-wiring's endpointsSettings.subscribe → reconciler.onChange).
+    // the broker client (wire-voice's endpointsSettings.subscribe → reconciler.onChange).
     expect(commits).toEqual([]);
     expect(endpointsSettings.get().broker_base_url).toBe("");
 

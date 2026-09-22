@@ -1,14 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAgentNotifySettings } from "../../io/agent-notify-settings";
-import { createFillerSettings } from "../../io/filler-settings";
-import { createMessageWindowSettings } from "../../io/message-window-settings";
-import { createFlagSettings } from "../../io/persisted-store";
-import { createScreenKnobSettings } from "../../io/screen-settings";
-import { createVadSettings } from "../../io/vad-settings";
-import { createSwitchRows } from "../quick-controls";
+import { createAgentNotifySettings } from "../../settings/backend/agent-notify-settings";
+import { createScreenKnobSettings } from "../../settings/capture/screen-settings";
+import { createMessageWindowSettings } from "../../settings/panels/message-window-settings";
+import { createFlagSettings } from "../../settings/persisted-store";
+import { createFillerSettings } from "../../settings/voice/filler-settings";
+import { createVadSettings } from "../../settings/voice/vad-settings";
 import { reflectSwitchRows } from "./reflect";
-import type { SwitchRow } from "./switch-row";
+import { createSwitchRows, type SwitchRow } from "./switch-row";
 import { buildPanelHtml } from "./template";
 
 function makeSwitchRows(): SwitchRow[] {
@@ -19,9 +18,14 @@ function makeSwitchRows(): SwitchRow[] {
     gazeSettings: createFlagSettings(true),
     climbSettings: createFlagSettings(true),
     fallSettings: createFlagSettings(true),
-    agentNotifySettings: createAgentNotifySettings({ initial: { enabled: true, port: 8770 } }),
+    agentNotifySettings: createAgentNotifySettings({
+      storage: { load: () => ({ enabled: true, port: 8770 }), save: () => {} },
+    }),
     fillerSettings: createFillerSettings({
-      initial: { enabled: false, language: "ja", customPools: {} },
+      storage: {
+        load: () => ({ enabled: false, language: "ja", customPools: {} }),
+        save: () => {},
+      },
     }),
     bubblePersistSettings: createFlagSettings(false),
     messageWindowSettings: createMessageWindowSettings(),
@@ -45,6 +49,7 @@ function render(switchRows: readonly SwitchRow[]): HTMLElement {
     showPacerGap: false,
     showRateLimits: false,
     showDevtools: false,
+    showMessage: false,
     showHistory: false,
     railCollapsed: false,
     closedSections: new Set(),

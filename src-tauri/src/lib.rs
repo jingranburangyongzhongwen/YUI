@@ -197,6 +197,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Global hotkey — registration/removal handled by JS guest binding (input summon hotkey).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Bubble links (target=_blank) open in the default browser.
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // Lets the pet window cross onto a lower-scale monitor mid-move instead of
             // being clamped to whichever screen its frame still overlaps.
@@ -206,6 +208,8 @@ pub fn run() {
 
             let log_offset = resolve_log_offset();
             let mut builder = tauri_plugin_log::Builder::new()
+                // Drop the plugin's default Stdout + LogDir targets; only the ones below apply.
+                .clear_targets()
                 .level(level_for(cfg!(debug_assertions)))
                 .format(move |out, message, record| {
                     out.finish(format_args!(

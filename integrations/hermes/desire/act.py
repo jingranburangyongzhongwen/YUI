@@ -1,4 +1,4 @@
-"""Budget-enforced action helper for the Natsume desire integration."""
+"""Budget-enforced action helper for the desire integration."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from urllib import request as urllib_request
 from zoneinfo import ZoneInfo
 
 import desire_state
+import skill_usage
 
 KST = ZoneInfo("Asia/Seoul")
 CAPS = desire_state.CAPS
@@ -21,6 +22,7 @@ RESERVATIONS = {
     "issue": ("issues", "issue_filed"),
     "comment": ("self_comments", "self_comment_filed"),
     "pr": ("prs", "pr_filed"),
+    "dispatch": ("dispatches", "dispatch_started"),
 }
 
 
@@ -81,7 +83,7 @@ def _deliver(note, now, opener, kind="desire", event_type="desire.impulse"):
     body = {
         "signals": [{"kind": kind, "note": note}],
         "envelope": {
-            "source": "natsume-desire",
+            "source": desire_state.signal_source(),
             "event_type": event_type,
             "delivery": "immediate",
             "event_id": event_id,
@@ -153,6 +155,21 @@ def _report(note, now, opener):
     return 1
 
 
+def _report_skills(now):
+    """Print the load counts of the skills the agent made, once a day at report time."""
+
+    state_dir = desire_state.resolve_state_dir()
+    with desire_state.state_lock(state_dir):
+        record = desire_state.read_artefacts(state_dir) or desire_state.default_artefacts(now)
+
+    # The database scan runs outside the lock, so a turn never waits on it.
+    text, failure = skill_usage.section(now, first_seen=record["skill_first_seen"])
+    if failure is not None:
+        _audit(state_dir, now, "report_skills_failed", reason=failure)
+    print(text)
+    return 0
+
+
 def _outbox_send(item_id, now, opener):
     state_dir = desire_state.resolve_state_dir()
     outbox_path = state_dir / "outbox.jsonl"
@@ -214,7 +231,7 @@ def _outbox_send(item_id, now, opener):
     return 1
 
 
-def _reservation_action(kind, operation, reservation_id, url, now):
+def _reservation_action(kind, operation, reservation_id, url, now, model=None):
     state_dir = desire_state.resolve_state_dir()
     counter, filed_event = RESERVATIONS[kind]
     with desire_state.state_lock(state_dir):
@@ -242,7 +259,8 @@ def _reservation_action(kind, operation, reservation_id, url, now):
             budget[counter] = max(0, budget[counter] - 1)
         desire_state.write_json_atomic(state_dir / "budget.json", budget)
         if operation == "commit":
-            _audit(state_dir, now, filed_event, url=url, reservation_id=reservation_id)
+            named = {"model": model} if model is not None else {}
+            _audit(state_dir, now, filed_event, url=url, **named, reservation_id=reservation_id)
         else:
             _audit(state_dir, now, "reservation_released", kind=kind, reservation_id=reservation_id)
         return 0
@@ -320,7 +338,9 @@ def _parser():
     signal.add_argument("--note", required=True)
 
     report = commands.add_parser("report")
-    report.add_argument("--note", required=True)
+    report_group = report.add_mutually_exclusive_group(required=True)
+    report_group.add_argument("--note")
+    report_group.add_argument("--skills", action="store_true")
 
     for name in RESERVATIONS:
         action = commands.add_parser(name)
@@ -329,10 +349,12 @@ def _parser():
         group.add_argument("--commit", metavar="ID")
         group.add_argument("--release", metavar="ID")
         action.add_argument("--url")
+        if name == "dispatch":
+            action.add_argument("--model")
 
     satisfy = commands.add_parser("satisfy")
-    satisfy.add_argument("event", choices=desire_state.EVENT_DOSES)
-    satisfy.add_argument("--why", required=True)
+    satisfy.add_argument("event", choices=["learned", "praised"])
+    satisfy.add_argument("--ref", required=True)
 
     feedback = commands.add_parser("feedback")
     feedback_group = feedback.add_mutually_exclusive_group(required=True)
@@ -354,12 +376,23 @@ def _parser():
 
 
 def main(argv=None, *, now=None, opener=urllib_request.urlopen):
+    try:
+        return _run(argv, now, opener)
+    except desire_state.ConfigurationError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+def _run(argv, now, opener):
+    # Identity is read before any state transaction, so a missing value costs no budget.
+    desire_state.agent_name()
+    desire_state.hermes_profile()
     now = desire_state.normalize_now(now or datetime.now(KST))
     args = _parser().parse_args(argv)
     if args.command == "signal":
         return _signal(args.note, now, opener)
     if args.command == "report":
-        return _report(args.note, now, opener)
+        return _report_skills(now) if args.skills else _report(args.note, now, opener)
     if args.command in RESERVATIONS:
         if args.reserve:
             operation, reservation_id = "reserve", None
@@ -368,12 +401,16 @@ def main(argv=None, *, now=None, opener=urllib_request.urlopen):
             if not args.url:
                 print("--url is required with --commit", file=sys.stderr)
                 return 1
+            if args.command == "dispatch" and not args.model:
+                print("--model is required with --commit", file=sys.stderr)
+                return 1
         else:
             operation, reservation_id = "release", args.release
-        return _reservation_action(args.command, operation, reservation_id, args.url, now)
+        model = getattr(args, "model", None)
+        return _reservation_action(args.command, operation, reservation_id, args.url, now, model)
     if args.command == "satisfy":
         try:
-            reward = desire_state.satisfy(args.event, args.why, now)
+            reward = desire_state.satisfy(args.event, args.ref, now)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             return 1

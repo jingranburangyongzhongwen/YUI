@@ -1,0 +1,277 @@
+/* Message window — the same bubble and input as the pet window, re-laid as a
+   top-left anchored column under a name-plate handle. The window itself is the
+   340px column, so the overlay's absolute positioning gives way to flow. */
+
+/* Both classes, because surfaces.css is injected after this file and its `.yui-ui`
+   base rule would otherwise win the tie and keep the column absolutely positioned. */
+.yui-ui.yui-ui--message {
+  box-sizing: border-box;
+  position: static;
+  inset: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 340px;
+  /* 12 lines × 1.425rem (0.95rem × 1.5) + 1.4rem padding + 2px border */
+  --yui-bubble-max-h: calc(12 * 1.425rem + 1.4rem + 2px);
+  padding: 8px;
+  pointer-events: auto;
+}
+
+/* ── Plate row — the handle and the delegation chip, side by side, with the
+   list wrapping onto its own full-width line beneath them ── */
+.yui-plate-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* The chip is absolutely placed beside the character; here display: contents unwraps it
+   so the chip button and the list become direct flex items of the row. */
+.yui-ui--message .yui-deleg {
+  display: contents;
+}
+
+/* display: contents would otherwise beat the UA [hidden] rule and keep a hidden chip's
+   children in the row. */
+.yui-ui--message .yui-deleg[hidden] {
+  display: none;
+}
+
+/* display: contents leaves .yui-deleg with no box to fade, so the chip button carries
+   the fade in this scope; transitionend still bubbles from it to .yui-deleg for afterFadeOut. */
+.yui-ui--message .yui-deleg__chip {
+  min-height: 26px;
+  box-sizing: border-box;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition:
+    opacity var(--yui-dur) var(--yui-ease),
+    transform var(--yui-dur) var(--yui-ease);
+}
+.yui-ui--message .yui-deleg.is-visible .yui-deleg__chip {
+  opacity: 1;
+  transform: none;
+}
+
+/* The list takes its own full-width line under the plate and chip. */
+.yui-ui--message .yui-deleg__list {
+  position: static;
+  flex: 1 0 100%;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  box-sizing: border-box;
+  /* Both full-width panels — this one and the reasoning panel — sit after both buttons. */
+  order: 1;
+}
+
+/* ── Name plate — the handle, the state tell and the way back to the character ── */
+.yui-plate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 26px;
+  padding: 0 0.3rem 0 0.6rem;
+  border-radius: var(--yui-radius-chip);
+  background: var(--yui-scrim-strong);
+  border: 1px solid var(--yui-edge);
+  box-shadow: var(--yui-float);
+  cursor: grab;
+}
+.yui-plate:active {
+  cursor: grabbing;
+}
+
+.yui-plate__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--yui-text-mute);
+  opacity: 0.55;
+}
+.yui-plate[data-state="responding"] .yui-plate__dot {
+  background: var(--yui-accent);
+  opacity: 1;
+  animation: yui-plate-pulse 1.6s var(--yui-ease) infinite;
+}
+
+@keyframes yui-plate-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.yui-plate[data-state="thinking"] .yui-plate__dot {
+  background: var(--yui-text-dim);
+  opacity: 1;
+  animation: yui-plate-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes yui-plate-breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.75);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.yui-plate__name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--yui-text);
+  text-shadow: var(--yui-text-shadow);
+}
+
+.yui-plate__state {
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--yui-text-dim);
+  text-shadow: var(--yui-text-shadow);
+}
+.yui-plate__state:empty {
+  display: none;
+}
+
+.yui-plate__dock {
+  display: grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--yui-scrim-strong);
+  color: var(--yui-text-dim);
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--yui-dur-fast) var(--yui-ease);
+}
+.yui-plate:hover .yui-plate__dock {
+  opacity: 0.5;
+}
+.yui-plate__dock:hover,
+.yui-plate__dock:focus-visible {
+  opacity: 1;
+}
+.yui-plate__dock:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--yui-accent-soft);
+}
+
+/* ── Bubble and input in flow ──
+   Both surfaces keep their own material; only the positioning is replaced. */
+.yui-ui--message .yui-bubble {
+  position: static;
+  box-sizing: border-box;
+  transform: none;
+  max-width: 100%;
+  max-height: var(--yui-bubble-max-h, 34vh);
+  border-top-left-radius: 6px;
+}
+.yui-ui--message .yui-bubble.is-visible {
+  transform: none;
+}
+/* The lift above the input is a pet-window trick; in flow the column already separates them. */
+.yui-ui--message .yui-bubble.is-above-input {
+  max-height: var(--yui-bubble-max-h, 34vh);
+}
+
+/* The window is already the popped-out one — its surfaces offer only the way back. */
+.yui-ui--message .yui-bubble__pop {
+  display: none;
+}
+.yui-ui--message .yui-input__pop {
+  display: none;
+}
+
+.yui-ui--message .yui-input {
+  position: static;
+  transform: none;
+  width: 100%;
+}
+.yui-ui--message .yui-input.is-open {
+  transform: none;
+}
+/* display: flex beats the UA's [hidden] rule, and in flow a closed input would
+   hold the column open at the height of a composer nobody summoned. */
+.yui-ui--message .yui-input[hidden] {
+  display: none;
+}
+
+/* 12 lines × 1.33rem (0.95rem × 1.4) + vertical padding — grows to here, then scrolls. */
+.yui-ui--message .yui-input__field {
+  max-height: calc(12 * 1.33rem + 1.1rem);
+}
+
+/* Waiting tells — the input embers while thinking, the bubble border while responding.
+   The plate's row precedes both in the column, so the sibling combinator carries the state. */
+.yui-plate-row:has(.yui-plate[data-state="thinking"]) ~ .yui-input {
+  animation: yui-input-ember 2.4s ease-in-out infinite;
+}
+
+@keyframes yui-input-ember {
+  0%,
+  100% {
+    border-color: var(--yui-edge);
+    box-shadow:
+      var(--yui-float),
+      0 0 0 1px transparent;
+  }
+  50% {
+    border-color: var(--yui-accent);
+    box-shadow:
+      var(--yui-float),
+      0 0 0 1px var(--yui-accent-soft);
+  }
+}
+
+.yui-plate-row:has(.yui-plate[data-state="responding"]) ~ .yui-bubble {
+  animation: yui-bubble-ember 2.4s ease-in-out infinite;
+}
+
+@keyframes yui-bubble-ember {
+  0%,
+  100% {
+    border-color: var(--yui-edge);
+  }
+  50% {
+    border-color: var(--yui-accent-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yui-ui--message .yui-bubble,
+  .yui-ui--message .yui-input {
+    transform: none !important;
+  }
+  .yui-ui--message .yui-deleg__chip {
+    transition-duration: var(--yui-dur-fast) !important;
+    transition-property: opacity !important;
+    transform: none !important;
+  }
+  .yui-plate[data-state="responding"] .yui-plate__dot,
+  .yui-plate[data-state="thinking"] .yui-plate__dot {
+    animation: none;
+  }
+  .yui-plate[data-state="thinking"] .yui-plate__dot {
+    opacity: 1;
+  }
+  .yui-plate-row:has(.yui-plate[data-state="thinking"]) ~ .yui-input {
+    animation: none;
+    border-color: var(--yui-accent);
+  }
+  .yui-plate-row:has(.yui-plate[data-state="responding"]) ~ .yui-bubble {
+    animation: none;
+    border-color: var(--yui-accent-soft);
+  }
+}

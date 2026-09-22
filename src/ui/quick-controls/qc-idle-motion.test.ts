@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createIdleMotionSettings } from "../../io/idle-motion-settings";
+import { createIdleMotionSettings } from "../../settings/avatar/idle-motion-settings";
 import { setLocale } from "../i18n";
-import { createQuickControls } from "../quick-controls";
+import { createQuickControls } from "./quick-controls";
 import { defaultQcArgs } from "./test-helpers";
 
 const IDLE_POOL = {

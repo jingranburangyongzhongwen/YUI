@@ -1,0 +1,166 @@
+import { describe, expect, it, vi } from "vitest";
+import type { AppConfig } from "../config/load";
+import { avatarFixture, guardrailsFixture } from "../config/load-test-helpers";
+import {
+  type ConfiguredBootstrapFactories,
+  createConfiguredBootstrap,
+} from "./bootstrap-configured";
+
+function validConfig(): AppConfig {
+  return {
+    endpoints: {
+      chat_base_url: "http://chat.test/v1",
+      stt_base_url: "http://stt.test/v1",
+      tts_base_url: "http://tts.test/v1",
+    },
+    avatar: {
+      ...avatarFixture(),
+      vrm_url: "/vrms/test.vrm",
+      available: [{ id: "test", label: "Test", url: "/vrms/test.vrm" }],
+      walk: {
+        interval_min_ms: 60_000,
+        interval_max_ms: 180_000,
+        distance_min_px: 80,
+        distance_max_px: 320,
+        floor_tolerance_px: 8,
+      },
+      fall: {
+        gravity_px_s2: 2400,
+        max_speed_px_s: 1800,
+        min_drop_frac: 0.2,
+        cue_cooldown_ms: 60_000,
+        land_room_frac: 0.5,
+        step_off_probability: 0.1,
+      },
+    },
+    emotionRegistry: {},
+    motions: {},
+    guardrails: {
+      debounce_ms: {
+        os_event_watcher: 0,
+        user_input_source: 0,
+        screen_watcher: 5000,
+      },
+      rate_limit: {
+        window_ms: 60_000,
+        tier2_max: 10,
+        tier3_max: 5,
+        overall_max: 20,
+        cooldown_ms: 30_000,
+      },
+      attachments: guardrailsFixture().attachments,
+    },
+    filler: {
+      gap_ms: 1_000,
+      gap_jitter_ms: 100,
+      max_repeats: 3,
+      gap_growth: 2,
+      long_wait_ms: 40000,
+      pools: {},
+    },
+    hotkeys: { summon_global: "CmdOrCtrl+Shift+Y" },
+    screen: {
+      prev_dwell_ms: 600000,
+      settle_ms: 90000,
+      long_session_ms: 2700000,
+      min_gap_ms: 300000,
+      quiet_after_turn_ms: 180000,
+      recent_cap: 5,
+    },
+  };
+}
+
+function fakeFactories(disposalOrder: string[] = []): ConfiguredBootstrapFactories {
+  return {
+    create: vi.fn(async (_cfg, _phase1, register) => {
+      for (const name of [
+        "voice",
+        "dispatcher",
+        "sources",
+        "interactions",
+        "summonHotkey",
+        "broker",
+      ]) {
+        register(() => disposalOrder.push(name));
+      }
+      return {
+        voice: { name: "voice" },
+        dispatcher: { name: "dispatcher" },
+        guardrails: { name: "guardrails" },
+        summonHotkey: { name: "summonHotkey" },
+        broker: { name: "broker" },
+      } as never;
+    }),
+  };
+}
+
+describe("createConfiguredBootstrap", () => {
+  it("constructs every configured handle with a valid config", async () => {
+    const factories = fakeFactories();
+    const configured = await createConfiguredBootstrap(validConfig(), {} as never, factories);
+
+    expect(configured.voice).toBeTruthy();
+    expect(configured.dispatcher).toBeTruthy();
+    expect(configured.guardrails).toBeTruthy();
+    expect(configured.summonHotkey).toBeTruthy();
+    expect(configured.broker).toBeTruthy();
+    expect(factories.create).toHaveBeenCalledWith(validConfig(), {}, expect.any(Function));
+  });
+
+  it("drains registered resources once in LIFO order", async () => {
+    const order: string[] = [];
+    const configured = await createConfiguredBootstrap(
+      validConfig(),
+      {} as never,
+      fakeFactories(order),
+    );
+
+    configured.dispose();
+    configured.dispose();
+
+    expect(order).toEqual([
+      "broker",
+      "summonHotkey",
+      "interactions",
+      "sources",
+      "dispatcher",
+      "voice",
+    ]);
+  });
+
+  it("drains partial registrations when construction throws", async () => {
+    const order: string[] = [];
+    const factories: ConfiguredBootstrapFactories = {
+      create: vi.fn(async (_cfg, _phase1, register) => {
+        register(() => order.push("voice"));
+        register(() => order.push("dispatcher-partial"));
+        throw new Error("dispatcher construction failed");
+      }),
+    };
+
+    await expect(createConfiguredBootstrap(validConfig(), {} as never, factories)).rejects.toThrow(
+      "dispatcher construction failed",
+    );
+    expect(order).toEqual(["dispatcher-partial", "voice"]);
+  });
+
+  it("continues draining after a disposer throws", async () => {
+    const order: string[] = [];
+    const failure = new Error("teardown failed");
+    const factories: ConfiguredBootstrapFactories = {
+      create: vi.fn(async (_cfg, _phase1, register) => {
+        register(() => order.push("first"));
+        register(() => {
+          order.push("throwing");
+          throw failure;
+        });
+        register(() => order.push("last"));
+        return {} as never;
+      }),
+    };
+    const configured = await createConfiguredBootstrap(validConfig(), {} as never, factories);
+
+    expect(() => configured.dispose()).toThrow(failure);
+    expect(order).toEqual(["last", "throwing", "first"]);
+  });
+});

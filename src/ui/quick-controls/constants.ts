@@ -1,8 +1,14 @@
 /** Quick-controls display constants shared by the entry panel + its sub-modules. */
-import type { ReasoningEffort } from "../../io/agent-settings";
-import { ENDPOINT_FIELD_SPECS, type EndpointOverrides } from "../../io/endpoints-settings";
-import type { RateLimitOverrides } from "../../io/guardrails-settings";
-import { SCREEN_RECENT_CAP_MAX, type ScreenOverrides } from "../../io/screen-settings";
+import type { ReasoningEffort } from "../../settings/backend/agent-settings";
+import {
+  ENDPOINT_FIELD_SPECS,
+  type EndpointOverrides,
+} from "../../settings/backend/endpoints-settings";
+import type { RateLimitOverrides } from "../../settings/backend/guardrails-settings";
+import {
+  SCREEN_RECENT_CAP_MAX,
+  type ScreenOverrides,
+} from "../../settings/capture/screen-settings";
 import type { Locale } from "../i18n";
 
 // Tab identity — the suffix of each tab button's `yui-tab-*` element id.
@@ -23,7 +29,7 @@ export const SEG_LABEL_KEYS: Record<ReasoningEffort, string> = {
 // Endpoints section: text-input fields, derived from io/endpoints-settings's ENDPOINT_FIELD_SPECS
 // (url/string-kind rows only — enum/posInt-kind fields render as a dropdown or devtools input
 // elsewhere, not as a labeled text row here). If url=true, live validation with isValidEndpointUrl.
-export interface EndpointFieldDef {
+interface EndpointFieldDef {
   key: keyof EndpointOverrides;
   labelKey: string;
   url: boolean;
@@ -41,7 +47,7 @@ export const ENDPOINT_FIELDS: readonly EndpointFieldDef[] = ENDPOINT_FIELD_SPECS
 // Each row renders as a numeric input; an empty field means "no override, use the config default".
 // tier3_max has no row: classify() never returns tier 3 at the evaluate site, so the cap it would
 // edit is never compared.
-export interface RateLimitFieldDef {
+interface RateLimitFieldDef {
   key: keyof RateLimitOverrides;
   id: string;
   labelKey: string;
@@ -155,28 +161,33 @@ export const CHATKEY_EYE_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden
 export const CHATKEY_EYE_OFF_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4l16 16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M9.6 5.9A9.6 9.6 0 0 1 12 5.5C18 5.5 21.5 12 21.5 12a16 16 0 0 1-2.7 3.3M6.3 7.7A16 16 0 0 0 2.5 12S6 18.5 12 18.5a9.3 9.3 0 0 0 2.7-.4" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9.7 9.8a2.6 2.6 0 0 0 3.6 3.7" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>`;
 export const CHATKEY_CLEAR_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`;
 
-export const CHAT_APIS = ["responses", "chat_completions"] as const;
+export const CHAT_APIS = ["responses", "chat_completions", "push"] as const;
 export type ChatApi = (typeof CHAT_APIS)[number];
 // chat_api → i18n key for its dropdown option / summary hint label.
 export const CHAT_API_LABEL_KEYS: Record<ChatApi, string> = {
   responses: "svc.chat_type_responses",
   chat_completions: "svc.chat_type_completions",
+  push: "svc.chat_type_push",
 };
 
 // Chat provider presets (Advanced tab, chat card) — selecting one autofills chat_base_url with the
-// provider's OpenAI-compatible path. Brand names are display-as-is, never localized. "custom" is the
-// no-autofill entry the dropdown falls back to when the URL matches no preset.
+// provider's OpenAI-compatible path, the chat protocol, or both. Brand names are display-as-is,
+// never localized. "custom" is the no-autofill entry the dropdown falls back to when nothing matches.
 export const CHAT_PRESET_CUSTOM = "custom";
-export interface ChatProviderPreset {
+interface ChatProviderPreset {
   id: string;
   name: string;
-  url: string;
+  /** Autofilled chat_base_url. Absent where the address is the user's own deployment. */
+  url?: string;
+  /** Protocol the provider speaks. Absent where the provider speaks the current one. */
+  chatApi?: ChatApi;
 }
 export const CHAT_PROVIDER_PRESETS: readonly ChatProviderPreset[] = [
   { id: "openai", name: "OpenAI", url: "https://api.openai.com/v1" },
   { id: "ollama", name: "Ollama", url: "http://localhost:11434/v1" },
   { id: "lmstudio", name: "LM Studio", url: "http://localhost:1234/v1" },
   { id: "groq", name: "Groq", url: "https://api.groq.com/openai/v1" },
+  { id: "hermes", name: "Hermes Agent", chatApi: "push" },
 ];
 
 // Tab icons — same line-icon vocabulary as other icon buttons (1.7 stroke, 24x24 viewBox). Only clue when rail collapses.

@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { agentTriggerableMotionIds } from "../io/broker-client";
+import { agentTriggerableMotionIds } from "../io/chat/broker-client";
+import { validateAvatar } from "./validators/avatar";
 import { validateEndpoints } from "./validators/endpoints";
+import { validateGuardrails } from "./validators/guardrails";
 import { validateMotions } from "./validators/motions";
 import { validateScreen } from "./validators/screen";
 
@@ -137,6 +139,24 @@ describe("configs/avatar.json", () => {
     });
   });
 
+  it("passes the real avatar config through validation", () => {
+    expect(() => validateAvatar("configs/avatar.json", a)).not.toThrow();
+  });
+
+  it("declares no gaze key the validator does not read", () => {
+    expect(Object.keys(a.gaze).sort()).toEqual([
+      "deadDeg",
+      "disengageDeg",
+      "eyeMaxDeg",
+      "headEngageDeg",
+      "headNeckSplit",
+      "maxHeadPitch",
+      "maxHeadYaw",
+      "sensitivity",
+      "smooth",
+    ]);
+  });
+
   it("ships built-in touch/gesture cues as label-only (context is persona judgment, not client data)", () => {
     const builtIn: Array<[string, any]> = [
       ["tap.region_cues.head", a.tap.region_cues.head],
@@ -160,9 +180,7 @@ describe("configs/guardrails.json", () => {
   const g = read("configs/guardrails.json");
 
   it("carries debounce_ms / rate_limit blocks with §6 defaults", () => {
-    expect(g.debounce_ms.idle_watcher).toBe(30000);
     expect(g.debounce_ms.os_event_watcher).toBe(5000);
-    expect(g.debounce_ms.backend_push_source).toBe(10000);
     expect(g.debounce_ms.user_input_source).toBe(0);
     expect(g.debounce_ms.screen_watcher).toBe(5000);
     expect(g.rate_limit.window_ms).toBe(3600000);
@@ -175,6 +193,10 @@ describe("configs/guardrails.json", () => {
   it("carries the attach-time caps for turn attachments", () => {
     expect(g.attachments.max_count).toBe(6);
     expect(g.attachments.max_image_bytes).toBe(5242880);
+  });
+
+  it("passes the real guardrails config through validation", () => {
+    expect(() => validateGuardrails("configs/guardrails.json", g)).not.toThrow();
   });
 });
 

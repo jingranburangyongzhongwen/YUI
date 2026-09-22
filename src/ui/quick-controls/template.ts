@@ -1,7 +1,7 @@
 /** Quick-controls panel markup — pure string construction (no DOM, no state). */
-import { INSTRUCTIONS_MAX_LEN, REASONING_EFFORTS } from "../../io/agent-settings";
-import type { EndpointOverrides } from "../../io/endpoints-settings";
-import { RATE_LIMIT_MAX } from "../../io/guardrails-settings";
+import { INSTRUCTIONS_MAX_LEN, REASONING_EFFORTS } from "../../settings/backend/agent-settings";
+import type { EndpointOverrides } from "../../settings/backend/endpoints-settings";
+import { RATE_LIMIT_MAX } from "../../settings/backend/guardrails-settings";
 import { LOCALE_DISPLAY_NAMES, t } from "../i18n";
 import {
   CHAT_API_LABEL_KEYS,
@@ -61,6 +61,8 @@ interface PanelHtmlOptions {
   /** Whether the rate-limit cap rows render — true when the guardrails-override store is injected. */
   showRateLimits: boolean;
   showDevtools: boolean;
+  /** Whether the header carries the button that opens the text input. */
+  showMessage: boolean;
   /** Whether the History tab renders — true when a transcript store is injected. */
   showHistory: boolean;
   /** Initial collapsed state of the sections rail, read from localStorage before first paint. */
@@ -83,6 +85,7 @@ export function buildPanelHtml(o: PanelHtmlOptions): string {
     showPacerGap,
     showRateLimits,
     showDevtools,
+    showMessage,
     showHistory,
     railCollapsed,
     closedSections,
@@ -298,6 +301,11 @@ ${RATE_LIMIT_FIELDS.map((f) =>
             <span class="yui-session__value"></span>
           </div>
         </div>
+        <div class="yui-session__deleg" hidden>
+          <h3 class="yui-session__deleg-title">${t("deleg.list_title")}</h3>
+          <p class="yui-session__deleg-lost" hidden><span class="yui-session__deleg-lost-dot" aria-hidden="true"></span><span>${t("deleg.chip_lost")}</span></p>
+          <div class="yui-session__deleg-rows"></div>
+        </div>
       </div>
       </details>`
     : "";
@@ -337,6 +345,16 @@ ${RATE_LIMIT_FIELDS.map((f) =>
             <path d="M18 13v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
+        ${
+          showMessage
+            ? `
+        <button class="yui-iconbtn yui-iconbtn--message" type="button" aria-label="${t("panel.message")}" data-tip="${t("panel.message")}">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 6h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3v-3H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>`
+            : ""
+        }
         <button class="yui-iconbtn yui-iconbtn--close" type="button" aria-label="${t("panel.close")}" data-tip="${t("panel.close")}">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
@@ -391,7 +409,7 @@ ${RATE_LIMIT_FIELDS.map((f) =>
         <details class="yui-field-row yui-section" data-section="reasoning"${sectionOpenAttr("reasoning")}>
           <summary><span class="yui-field-row__label">${t("reasoning.label")}</span></summary>
           <span class="yui-field-row__sub">${t("reasoning.sub")}</span>
-          <div class="yui-seg" role="radiogroup" aria-label="${t("reasoning.label")}" style="--seg:0;">
+          <div class="yui-seg yui-effort-seg" role="radiogroup" aria-label="${t("reasoning.label")}" style="--seg:0;">
             <span class="yui-seg__ind" aria-hidden="true"></span>
             ${segButtonsHtml}
           </div>
@@ -672,6 +690,7 @@ ${switchRowsHtml("react", 8) || "        "}
             ${endpointRowHtml("chat_base_url")}
             ${endpointRowHtml("chat_model")}
             ${keyRowHtml("chatkey", "chatkey")}
+            <p class="yui-chat-status" role="status" hidden><span class="yui-chat-status__dot" aria-hidden="true"></span><span class="yui-chat-status__text"></span><button class="yui-chat-status__action" type="button" hidden></button></p>
             <button class="yui-reset yui-svc-reset" type="button" data-svc-reset="chat">${t("svc.reset_chat")}</button>
           </div>
         </details>

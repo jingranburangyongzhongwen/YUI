@@ -13,75 +13,34 @@
  *   VRMUtils.removeUnnecessaryVertices/combineSkeletons/combineMorphs, deepDispose).
  */
 
-import {
-  type VRM,
-  VRMHumanBoneList,
-  type VRMHumanBoneName,
-  VRMLoaderPlugin,
-  VRMUtils,
-} from "@pixiv/three-vrm";
-import { createVRMAnimationClip, VRMAnimationLoaderPlugin } from "@pixiv/three-vrm-animation";
+import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
+import { VRMAnimationLoaderPlugin } from "@pixiv/three-vrm-animation";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import type {
-  ControlEnvelope,
-  EmotionRegistry,
-  MotionKind,
-  MotionRegistry,
-  MotionRegistryEntry,
-} from "../contract";
+import type { EmotionRegistry, MotionRegistry } from "../contract";
 import { createLogger } from "../logger";
-import { type AlphaHitTest, createAlphaHitTest } from "./alpha-hit-test";
 import { routeDirective } from "./apply-directive";
-import { yawAt } from "./body-yaw";
+import { createCameraRig } from "./camera/rig";
+import { type CursorGaze, createCursorGaze } from "./expression/cursor-gaze";
+import { createEmotionCrossfade, type EmotionCrossfade } from "./expression/emotion-crossfade";
+import type { RenderEmotionSignal } from "./expression/emotion-resolver";
 import {
-  CAMERA_AZIMUTH_DEFAULT,
-  CAMERA_POLAR_DEFAULT,
-  clampPolar,
-  computeCameraFit,
-  type OrbitAngles,
-  orbitPosition,
-} from "./camera-fit";
-import { type CursorGaze, createCursorGaze } from "./cursor-gaze";
-import { createCycleDwell } from "./cycle-dwell";
-import { createEmotionCrossfade, type EmotionCrossfade } from "./emotion-crossfade";
-import type { RenderEmotionSignal } from "./emotion-resolver";
-import { isActive, shouldRenderFrame } from "./frame-gate";
-import type { GazeConfig } from "./gaze-tracker";
-import { mirrorClipTracks } from "./mirror-clip";
-import {
-  createMotionController,
-  type MotionController,
-  playbackAfterRegistrySwap,
-  poolSelectionChanged,
-  type RenderMotionSignal,
-  type ResolvedMotion,
-  shouldRestartIdle,
-} from "./motion-controller";
-import { createDeadClipRegistry, resolveBaselineFallback } from "./motion-fallback";
-import { createMotionStartGeneration } from "./motion-start-generation";
-import { createMouthLipsync, describeExpressions, MOUTH_EXPRESSION_KEY } from "./mouth-lipsync";
-import {
-  characterScreenHeight,
-  projectToScreen,
-  SEAT_DROP_DEFAULT,
-  seatAnchorWorld,
-  worldYPerPixel,
-} from "./perch-geometry";
-import { baselineWhileHeld, shouldLeaveSeatForMotion, suppressWhileHeld } from "./perch-hold";
+  createMouthLipsync,
+  describeExpressions,
+  MOUTH_EXPRESSION_KEY,
+} from "./expression/mouth-lipsync";
+import { type AlphaHitTest, createAlphaHitTest } from "./geometry/alpha-hit-test";
+import { isActive, shouldRenderFrame } from "./geometry/frame-gate";
+import { SEAT_DROP_DEFAULT } from "./geometry/perch-geometry";
+import { clampPixelRatio } from "./geometry/pixel-ratio";
+import { createScreenProbes } from "./geometry/screen-probes";
+import { clientToStage } from "./geometry/stage-coords";
+import type { ViewWindow } from "./geometry/view-window";
+import { createClipLibrary } from "./motion/clip-library";
+import { createMotionPlayback } from "./motion/motion-playback";
+import { createRootYaw } from "./motion/root-yaw";
 import { createPinController, type PinController } from "./pin-controller";
-import { clampPixelRatio } from "./pixel-ratio";
-import { projectBoxWidthPx, projectFeetAnchor, type ScreenAnchor } from "./project-anchor";
-import {
-  detrendClipRootXZ,
-  detrendClipRootY,
-  type RootYCurve,
-  recenterClipRootMotion,
-  sampleRootYCurve,
-} from "./recenter-root-motion";
-import { clipCacheKey, playbackClip } from "./self-crossfade";
-import { clientToStage } from "./stage-coords";
-import { applyViewWindow, type ViewWindow } from "./view-window";
+import type { Renderer, RendererOptions, TickContext, TickFn, VrmLoadResult } from "./types";
 import {
   anyConverging,
   buildVrmParticipants,
@@ -92,296 +51,24 @@ import {
 
 const log = createLogger("renderer");
 
-/** Default fit-to-bounds framing — overridden by configs/avatar.json. */
-const DEFAULT_FRAMING_MARGIN = 0.1;
-const DEFAULT_FRAMING_FOV = 30;
-
 /**
  * Seat drop below the hip bone (world units) for the window-sit perch.
  * Tunable: the seat-contact point sits this far below the hip joint.
  */
 const SEAT_DROP = SEAT_DROP_DEFAULT;
-/**
- * Per-frame ease rate for the effective orbit polar (proportional step). Drag nudges
- * land in ~2 frames (feels direct); the larger jump when the perch clamp tightens the
- * polar into [60°,120°] eases over several frames instead of snapping.
- */
-const ORBIT_EASE_RATE = 0.35;
-/** Below this |Δpolar| (radians) the orbit ease is settled (≈0.06°). */
-const ORBIT_SETTLE_EPS = 1e-3;
 
 /** Idle (ambient-only) frame cap — full refresh is reserved for active animation. */
 const IDLE_FPS = 30;
 
-/** Ambient baseline pool id — the only pool whose variants the user selects. */
-const IDLE_POOL_ID = "idle";
-
-interface RendererOptions {
-  /** Canvas element to mount the VRM render. */
-  mount: HTMLElement;
-  /**
-   * motion registry (configs/motions.json). When injected, playMotion operates.
-   * If absent, playMotion warns then no-ops. Can be injected later via setMotionRegistry.
-   */
-  motionRegistry?: MotionRegistry;
-  /**
-   * emotion registry (configs/emotion_registry.json). When injected, setEmotion operates.
-   * If absent, setEmotion warns then no-ops. Can be injected later via setEmotionRegistry.
-   */
-  emotionRegistry?: EmotionRegistry;
-  /** Initial fit-to-bounds framing; live path is setFraming. Omitted keys keep defaults. */
-  framing?: { margin?: number; fov?: number };
-  /** Initial cursor-gaze tracking thresholds; live path is setGaze. Omitted keys keep defaults. */
-  gaze?: Partial<GazeConfig>;
-}
-
-/** Context passed every rAF frame, **before vrm.update(dt)**. */
-export interface TickContext {
-  /** Currently loaded VRM (hook is invoked only when vrm exists). */
-  readonly vrm: VRM;
-  /** Time elapsed since the previous frame (seconds). */
-  readonly dt: number;
-  /** Total elapsed time since the first frame (seconds). */
-  readonly elapsed: number;
-}
-
-/** Frame hook. Bone/expression changes must be made here (before vrm.update) to reflect in spring bone. */
-export type TickFn = (ctx: TickContext) => void;
-
-/** loadVRM result — model name read from VRMC_vrm/VRM0 meta (null if absent). */
-export interface VrmLoadResult {
-  metaName: string | null;
-}
-
-export interface Renderer {
-  /** Load or hotswap VRM. If an existing model exists, prepare new model, dispose old, then replace. Returns meta name. */
-  loadVRM(url: string): Promise<VrmLoadResult>;
-  /**
-   * Register frame hook. Called **before vrm.update(dt)**;
-   * fires only when currentVrm exists. Returns unregister function.
-   */
-  onTick(fn: TickFn): () => void;
-  /**
-   * Apply render directive per render contract.
-   * emotion → setEmotion (only if present, otherwise hold/no-op), motion → playMotion
-   * (if present; explicit null returns to idle; absent holds the playing clip).
-   * Pure routing is handled by ./apply-directive routeDirective.
-   */
-  applyDirective(env: ControlEnvelope): void;
-  /**
-   * emotion → expression GPU crossfade transition.
-   * Operates only when registry is injected and VRM is loaded.
-   * emotion === null is a NO-OP (retains prior expression). Returns to neutral only via explicit {id:"neutral"}.
-   */
-  setEmotion(emotion: RenderEmotionSignal | null): void;
-  /**
-   * Slowly ease the prior emotion to neutral (on turn's TTS playback end). Reuses setEmotion
-   * crossfade by sending explicit {id:"neutral"} transition with long transition_ms.
-   * If durationMs unspecified, uses slow default. If registry/VRM not injected, setEmotion no-ops.
-   */
-  easeEmotionToNeutral(durationMs?: number): void;
-  /**
-   * Inject (or replace) emotion registry. When injected, recomputes hasExpression predicate
-   * relative to current VRM and (re)generates EmotionResolver.
-   */
-  setEmotionRegistry(registry: EmotionRegistry): void;
-  /**
-   * Set lipsync mouth-open target (amplitude-only). Value is clamped to [0,1] and
-   * smoothly (lerp) applied each frame via `aa` preset. Does not touch blink/lookAt/emotion keys.
-   */
-  setMouthOpen(value: number): void;
-  /** Stop lipsync — ease mouth to 0 (closed). */
-  stopMouth(): void;
-  /** Lookup motion registry and play VRMA. Registry must be injected to operate. */
-  playMotion(motion: RenderMotionSignal | null): void;
-  /**
-   * A published oneshot while perched stands up, plays, then sits back. The handler
-   * returns true when it owns the cue; false plays in place. null restores in-place playback.
-   */
-  setLeaveSeatForOneshot(handler: ((motion: RenderMotionSignal) => boolean) | null): void;
-  /** Currently committed motion (variant-resolved) — null before any playback. */
-  getCurrentMotion(): { id: string; vrma_path: string } | null;
-  /** Kind of the committed motion — null before any playback. */
-  currentMotionKind(): MotionKind | null;
-  /**
-   * Merge one motion into the live registry without restarting the current clip.
-   * Used to hot-play a just-installed custom clip before the next config poll.
-   */
-  upsertMotion(id: string, entry: MotionRegistryEntry): void;
-  /**
-   * Inject (or replace) motion registry. When injected, (re)generates MotionController.
-   * A still-registered playing clip is kept; otherwise idle starts if a VRM is loaded.
-   */
-  setMotionRegistry(registry: MotionRegistry): void;
-  /**
-   * Restrict the ambient idle pool to these variant paths (the user's Character-tab selection).
-   * Applies to the next rotation — a variant already playing finishes its cycle first.
-   */
-  setIdleVariants(paths: readonly string[]): void;
-  /**
-   * Update fit-to-bounds framing. Merge only given keys onto current framing
-   * (omitted keys retain defaults); if VRM is loaded, immediately refit.
-   */
-  setFraming(framing: { margin?: number; fov?: number }): void;
-  /**
-   * Draw the reference-size framing — the window size at travel start — at canvas
-   * offset `(x, y)`; null draws it to fill the whole canvas. A travel parks the OS
-   * window over its whole path and uses this to keep the character's on-screen size
-   * and every camera-projected consumer (feet anchor, width, hit test) unchanged while
-   * she moves inside the parked canvas.
-   */
-  setViewWindow(view: { x: number; y: number; width: number; height: number } | null): void;
-  /**
-   * Set mouse-wheel zoom multiplier. Factor multiplied by fit distance (>1 ⇒ closer ⇒ larger).
-   * Non-finite or identical values are no-ops. Clamping and persistence are caller's responsibility (src/io + main.ts).
-   */
-  setZoom(z: number): void;
-  /**
-   * Set orbit viewpoint (radians). azimuth is free (immediately applied); polar eases and narrows to [60°,120°]
-   * while perched, then returns to saved free angle on perch release.
-   * Clamping (free [2°,178°]) and persistence are caller's responsibility (src/io + main.ts).
-   */
-  setOrbit(angles: OrbitAngles): void;
-  /**
-   * Current screen pixel coordinates of character's feet (box center x/z, lowest y). null if VRM not loaded.
-   * Changes whenever camera is refit via resize/zoom — used to pin UI input to feet.
-   */
-  getCharacterAnchor(): ScreenAnchor | null;
-  /**
-   * How wide the character stands on screen (px), measured across the model box at the
-   * feet. The box is captured at load, so this is her rest-pose width rather than the
-   * live silhouette. null if the VRM is not loaded — a jump sizes the gap it will clear
-   * by it.
-   */
-  getCharacterWidthPx(): number | null;
-  /**
-   * Per-pixel alpha hit test: true when the rendered character pixel under the
-   * window-local client CSS-px point (x, y) — e.g. MouseEvent.clientX/clientY — is
-   * opaque (alpha ≥ threshold) — the true silhouette, including hair/transparent-
-   * texture edges. Converted internally to stage-local via the renderer's own
-   * cached mount rect. Samples a CPU-side low-res alpha grab refreshed inside the
-   * render loop (with a 3×3 dilation so thin features stay hittable). False when
-   * no VRM/grab is available yet. No GL readback happens here — the readback is
-   * in the rAF loop.
-   */
-  hitTest(x: number, y: number): boolean;
-  /**
-   * Set the alpha threshold (0..1) the per-pixel hit test compares against.
-   * Sourced from configs/avatar.json `hit_test.alpha_threshold` via main.ts.
-   * Non-finite or out-of-(0,1] values are ignored.
-   */
-  setHitTestThreshold(threshold: number): void;
-  /**
-   * Live one-shot probe used at drop time to decide if the character is over a
-   * window. Projects the live hips bone (+SEAT_DROP) to pet-window px (`seatPx`)
-   * and measures the current on-screen pixel height (`charHpx`). null when no VRM
-   * is loaded or bones/projection are unavailable.
-   */
-  getPerchProbe(): { seatPx: { x: number; y: number }; charHpx: number } | null;
-  /**
-   * Live hand positions in pet-window logical px, projected the same way the feet and
-   * seat anchors are. null with no VRM or no hand bones. Diagnostic: it is how a mover
-   * measures where the hands actually land against the thing they reach for.
-   */
-  getHandAnchors(): { left: { x: number; y: number }; right: { x: number; y: number } } | null;
-  /** Live head/chest/hips projections in viewport CSS px plus the character's current screen height. */
-  getTapPoints(): {
-    head: { x: number; y: number } | null;
-    chest: { x: number; y: number } | null;
-    hips: { x: number; y: number } | null;
-    charHpx: number;
-  } | null;
-  /**
-   * Enter/exit perch-align mode. While a target is set, the seat (live hips
-   * +SEAT_DROP) is pinned every frame to `edgeLocalYpx` (the target window's top
-   * edge in pet-window-local px) via a dedicated additive vertical offset. null
-   * clears the offset — idle/cycle rendering is unaffected when unset.
-   * The `window_sit` motion itself is driven separately via the normal directive path.
-   */
-  setPerchTarget(target: { edgeLocalYpx: number } | null): void;
-  /** Current perch active state — used by occlusion poll to detect perch end. */
-  isPerched(): boolean;
-  /** Current side-peek pin — a published oneshot while peeking still plays in place. */
-  isPeeking(): boolean;
-  /** Set the side-peek edge pin, or clear it and restore the horizontal baseline. */
-  setPeekTarget(target: { targetXpx: number } | null): void;
-  /** Select mirrored clips for motions started after this call without restarting playback. */
-  setMotionMirror(on: boolean): void;
-  /**
-   * Ease the character's root yaw (radians, 0 = camera-facing) to `rad` over `easeMs`.
-   * The ambient stroll turns the body toward its travel direction through this.
-   */
-  setBodyYaw(rad: number, easeMs: number): void;
-  /**
-   * Screen pixels spanning one world metre at the current framing, measured at the
-   * feet. null when no VRM is loaded — the stroll derives its ground speed from this
-   * so the feet never slide at any window size or zoom.
-   */
-  getPxPerMetre(): number | null;
-  /**
-   * Cycle length (s) of a registered motion's loaded clip, null until it is cached.
-   * A looping clip repeats on its own duration, which is what a ground speed must divide by.
-   */
-  getMotionDuration(id: string): number | null;
-  /**
-   * Vertical travel (signed metres) the loader levelled out of a `root_lock_y` clip —
-   * what a mover has to supply by moving the window. null until the clip is cached,
-   * 0 for a clip that keeps its own travel.
-   */
-  getMotionTravelY(id: string): number | null;
-  /**
-   * The same travel at one point in the clip, interpolated between its keyframes —
-   * the curve the clip actually rises on, so a mover can follow it instead of a straight
-   * line. Signed metres from the clip's first key. null until the clip is cached.
-   */
-  getMotionTravelAt(id: string, timeS: number): number | null;
-  /**
-   * Lateral X travel at one point in a `root_lock_xz` clip, interpolated between
-   * keyframes. Signed metres from the clip's first key. null until the clip is
-   * cached, or when the entry is not xz-locked.
-   */
-  getMotionTravelXAt(id: string, timeS: number): number | null;
-  /** Clip-local playhead (s) of the committed motion. null when nothing is playing. */
-  getCurrentMotionTime(): number | null;
-  /**
-   * Load a registered motion's clip into the cache without playing it, so its duration
-   * and travel can be read before the motion starts. Resolves once loaded or given up on.
-   */
-  preloadMotion(id: string): Promise<void>;
-  /**
-   * Enable/disable the idle 30fps cap at runtime. Enabled (default) caps ambient-only
-   * frames to IDLE_FPS; disabled renders idle frames at full refresh. Pause-on-hidden
-   * is always on and unaffected by this toggle.
-   */
-  setIdleThrottleEnabled(enabled: boolean): void;
-  /**
-   * Update cursor-gaze tracking thresholds. Merge only given (finite) keys onto current
-   * (omitted keys retain defaults); applies immediately starting next frame.
-   */
-  setGaze(gaze: Partial<GazeConfig>): void;
-  /**
-   * Enable/disable cursor-gaze head+eye tracking at runtime. Disabled ⇒ the damped
-   * gaze eases back to neutral (no snap) and the motion/eyes are left untouched once settled.
-   */
-  setGazeEnabled(enabled: boolean): void;
-  /**
-   * Latest window-local client CSS px OS-cursor position — e.g. MouseEvent.
-   * clientX/clientY; null = unavailable. Converted internally to stage-local
-   * before forwarding to cursor-gaze.
-   */
-  setGazeCursor(pos: { x: number; y: number } | null): void;
-  /** Stop rAF loop + release GPU resources. */
-  dispose(): void;
-}
-
-export type { RenderEmotionSignal } from "./emotion-resolver";
-export type { RenderMotionSignal } from "./motion-controller";
-export type { MouthLipsync, MouthLipsyncOptions } from "./mouth-lipsync";
+export type { RenderEmotionSignal } from "./expression/emotion-resolver";
+export type { MouthLipsync, MouthLipsyncOptions } from "./expression/mouth-lipsync";
 export {
   createMouthLipsync,
   describeExpressions,
   MOUTH_EXPRESSION_KEY,
-} from "./mouth-lipsync";
+} from "./expression/mouth-lipsync";
+export type { RenderMotionSignal } from "./motion/motion-controller";
+export type { Renderer, RendererOptions, TickContext, TickFn, VrmLoadResult } from "./types";
 
 export function createRenderer(options: RendererOptions): Renderer {
   const { mount } = options;
@@ -393,32 +80,14 @@ export function createRenderer(options: RendererOptions): Renderer {
 
   const scene = new THREE.Scene();
 
-  // Initial framing; fitCamera overrides position/fov from the model bounding box.
-  const camera = new THREE.PerspectiveCamera(DEFAULT_FRAMING_FOV, 1, 0.1, 20);
+  // Placeholder pose held until the configured framing arrives and a model box exists;
+  // rig.fit then overrides position and fov from that box.
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
   camera.position.set(0, 1.3, 1.6);
   camera.lookAt(new THREE.Vector3(0, 1.3, 0));
 
   // Fit-to-bounds state: full-body framing recomputed on load/swap/resize.
   let modelBox: THREE.Box3 | undefined;
-  // Set during a travel: draws the reference-size framing at an offset in the parked
-  // canvas instead of filling it. null the rest of the time.
-  let view: ViewWindow | null = null;
-  let framing = {
-    margin: options.framing?.margin ?? DEFAULT_FRAMING_MARGIN,
-    fov: options.framing?.fov ?? DEFAULT_FRAMING_FOV,
-  };
-  // Mouse-wheel zoom factor on top of the fit distance: >1 ⇒ closer ⇒ bigger.
-  // Bounds/persistence live in src/io + main.ts (setZoom just applies). Default 1 = exact fit.
-  let zoom = 1;
-  // Orbit viewpoint on the fit sphere. azimuth/polar are the stored *free* angles
-  // (clamp/persist in src/io + main.ts). effectivePolar is what the camera uses — it
-  // eases toward the free polar, or toward the tightened perched clamp while perched.
-  // azimuth applies directly (no clamp, no ease). Default (0, 90°) = head-on.
-  let azimuth = CAMERA_AZIMUTH_DEFAULT;
-  let polar = CAMERA_POLAR_DEFAULT;
-  let effectivePolar = polar;
-  // True while effectivePolar is still easing toward its target (keeps frames uncapped).
-  let orbitConverging = false;
 
   // Owns both pin state machines + scene-position apply.
   const pins: PinController = createPinController({
@@ -426,56 +95,21 @@ export function createRenderer(options: RendererOptions): Renderer {
     mountWidth: () => mount.clientWidth || 1,
     mountHeight: () => mount.clientHeight || 1,
   });
-  const liveBoxScratch = new THREE.Box3();
-  const pxPerMetreScratch = new THREE.Vector3();
-  const pxPerMetreForward = new THREE.Vector3();
-  const liveFeetScratch = new THREE.Vector3();
-  const liveHeadScratch = new THREE.Vector3();
-
-  /** Reframe the camera to the current model box; no-op when no model is loaded. */
-  function fitCamera(): void {
-    if (!modelBox) return;
-    const fit = computeCameraFit(modelBox, {
-      fov: framing.fov,
-      aspect: camera.aspect,
-      margin: framing.margin,
-    });
-    if (!fit) return;
-    const d = fit.distance / zoom; // zoom>1 ⇒ camera closer ⇒ character bigger.
-    camera.fov = framing.fov;
-    // Orbit composes with the radius: orbit sets direction, zoom sets the radius d.
-    // effectivePolar is the eased polar (free, or perched-clamped).
-    const pos = orbitPosition(fit.target, d, { azimuth, polar: effectivePolar });
-    camera.position.copy(pos);
-    camera.lookAt(fit.target);
-    camera.updateProjectionMatrix();
-  }
-
-  /** Target polar the camera should settle at: tightened to the perched band while perched. */
-  function desiredPolar(): number {
-    return clampPolar(polar, pins.isPerched());
-  }
-
-  /**
-   * Ease effectivePolar one proportional step toward {@link desiredPolar} and re-fit.
-   * No-op once settled (sub-epsilon) — keeps idle frames off the re-fit path. Runs each
-   * frame from the rAF loop; orbitConverging gates the frame cap while still easing.
-   */
-  function stepOrbit(): void {
-    const target = desiredPolar();
-    const diff = target - effectivePolar;
-    if (Math.abs(diff) <= ORBIT_SETTLE_EPS) {
-      if (effectivePolar !== target) {
-        effectivePolar = target;
-        fitCamera();
-      }
-      orbitConverging = false;
-      return;
-    }
-    effectivePolar += diff * ORBIT_EASE_RATE;
-    orbitConverging = true;
-    fitCamera();
-  }
+  const probes = createScreenProbes({
+    camera,
+    getVrm: () => currentVrm,
+    getModelBox: () => modelBox,
+    mountWidth: () => mount.clientWidth || 1,
+    mountHeight: () => mount.clientHeight || 1,
+    hipsBone: () => pins.hipsBone(),
+    seatDrop: SEAT_DROP,
+  });
+  const rig = createCameraRig({
+    camera,
+    framing: options.framing ?? null,
+    getModelBox: () => modelBox,
+    isPerched: () => pins.isPerched(),
+  });
 
   const dir = new THREE.DirectionalLight(0xffffff, Math.PI);
   dir.position.set(1, 1, 1).normalize();
@@ -489,49 +123,15 @@ export function createRenderer(options: RendererOptions): Renderer {
   let currentVrm: VRM | undefined;
 
   // ── Motion playback state ──────────────────────────────────────────────
+  // Live motion registry — the clip library reads it through getRegistry.
   let motionRegistry: MotionRegistry | undefined = options.motionRegistry;
-  /** User-selected ambient idle variants; null until the settings overlay is applied. */
-  let idleVariants: readonly string[] | null = null;
-  /** Every controller resolves the ambient pool through the live selection. */
-  function newMotionController(registry: MotionRegistry): MotionController {
-    return createMotionController(registry, {
-      variantFilter: (id, variants) => {
-        const enabled = idleVariants;
-        if (id !== IDLE_POOL_ID || !enabled) return variants;
-        return variants.filter((v) => enabled.includes(v));
-      },
-    });
-  }
-  let controller: MotionController | undefined = motionRegistry
-    ? newMotionController(motionRegistry)
-    : undefined;
-  /** AnimationMixer for current VRM only (recreated on each hotswap). */
-  let mixer: THREE.AnimationMixer | undefined;
-  /** (vrma_path → AnimationClip) cache — clips are VRM-specific so cleared on hotswap. */
-  const clipCache = new Map<string, THREE.AnimationClip>();
-  /** Vertical travel (signed metres) levelled out of each cached clip; 0 when not locked. */
-  const clipTravelY = new Map<string, number>();
-  /** The rise each root-locked clip carries, as a curve a mover can follow. */
-  const clipRootCurve = new Map<string, RootYCurve>();
-  /** The lateral X path each xz-locked clip carries, as a curve a mover can follow. */
-  const clipRootCurveX = new Map<string, RootYCurve>();
-  /** Hips world y in the loaded VRM's rest pose — where a root-locked clip is anchored. */
-  let restHipsY: number | undefined;
-  const deadClips = createDeadClipRegistry(log);
-  /** Currently playing AnimationAction (prev in crossfade). */
-  let currentAction: THREE.AnimationAction | undefined;
-  let lastStateMotionId: string | null = null;
-  /** A published oneshot while perched — stand up, play, sit back. */
-  let leaveSeatForOneshot: ((motion: RenderMotionSignal) => boolean) | null = null;
-  /** mixer "finished" event → AnimationAction → motion id reverse lookup. */
-  const actionToId = new Map<THREE.AnimationAction, string>();
-  /** Hotswap race guard: if VRM changes during load async, discard. */
-  let vrmEpoch = 0;
-  const motionStartGeneration = createMotionStartGeneration();
-  let motionMirror = false;
-  const boneNameSwap = new Map<string, string>();
-  /** Scheduler for dwell (settling frame hold) before cycle motion variant swap — startMotion is cancel chokepoint. */
-  const cycleDwell = createCycleDwell();
+  const clips = createClipLibrary({ loader, getRegistry: () => motionRegistry, log });
+  const motion = createMotionPlayback({
+    clips,
+    registry: motionRegistry,
+    heldPosture: () => (pins.isPerched() ? "sitting" : pins.isPeeking() ? "peeking" : null),
+    log,
+  });
 
   // ── Lipsync state ──────────────────────────────────────────────────────
   // Mouth (`aa`) is lipsync-only — separate from ambient/emotion. Applied each frame via lerp in same
@@ -547,6 +147,7 @@ export function createRenderer(options: RendererOptions): Renderer {
     isVrmLoaded: () => currentVrm != null,
     mountWidth: () => mount.clientWidth || 1,
     mountHeight: () => mount.clientHeight || 1,
+    threshold: options.hitTestThreshold ?? null,
     log,
   });
 
@@ -555,33 +156,11 @@ export function createRenderer(options: RendererOptions): Renderer {
   const gaze: CursorGaze = createCursorGaze({
     camera,
     getVrm: () => currentVrm,
-    gaze: options.gaze,
+    gaze: options.gaze ?? null,
     log,
     mountWidth: () => mount.clientWidth || 1,
     mountHeight: () => mount.clientHeight || 1,
   });
-
-  /** mixer "finished" handler (oneshot end → controller.finish → return playback). */
-  const onMixerFinished = (e: { action: THREE.AnimationAction }): void => {
-    try {
-      const id = actionToId.get(e.action);
-      actionToId.delete(e.action);
-      if (!controller || !id) return;
-      // if cycle motion, hold settling final frame for cycle_dwell_ms then swap.
-      const isCycle = controller.current()?.cycle ?? false;
-      const dwell = motionRegistry?.[id]?.cycle_dwell_ms;
-      const swap = (): void => {
-        const decision = controller!.finish(id);
-        controller!.commit(decision);
-        if (decision.action === "play") {
-          void startMotion(decision.motion);
-        }
-      };
-      cycleDwell.onFinish(isCycle, dwell, swap);
-    } catch (err) {
-      log.error("motion_finish_handler_error", { error: String(err) });
-    }
-  };
 
   // Cached mount rect (viewport-relative) for client→stage-local conversion
   // (hitTest/setGazeCursor). Refreshed alongside size in resize() — mount is
@@ -592,27 +171,12 @@ export function createRenderer(options: RendererOptions): Renderer {
     const w = mount.clientWidth || 1;
     const h = mount.clientHeight || 1;
     renderer.setSize(w, h, false);
-    camera.aspect = view ? view.width / view.height : w / h;
-    camera.updateProjectionMatrix();
-    fitCamera(); // re-fit on resize so width-bound framing stays correct.
-    applyViewWindow(camera, view, w, h);
+    rig.resize(w, h);
     mountRect = mount.getBoundingClientRect();
   }
   resize();
   const ro = new ResizeObserver(resize);
   ro.observe(mount);
-
-  // ── Root yaw (ambient stroll facing) ──────────────────────────────────
-  // vrm.scene.rotation.y is a channel nothing else writes after load — the mixer
-  // animates bones and the pins own scene.position — so the eased yaw is applied
-  // on top of the model's own base rotation (π for VRM0, 0 for VRM1).
-  let baseYaw = 0;
-  let bodyYaw = 0;
-  let bodyYawFrom = 0;
-  let bodyYawTo = 0;
-  let bodyYawStartMs = 0;
-  let bodyYawDurationMs = 0;
-  let bodyYawConverging = false;
 
   const tickHooks = new Set<TickFn>();
   const clock = new THREE.Clock();
@@ -626,6 +190,9 @@ export function createRenderer(options: RendererOptions): Renderer {
   // Idle 30fps cap toggle (runtime). Disabled ⇒ idle frames render at full refresh.
   let idleThrottleEnabled = true;
 
+  // ── Root yaw (ambient stroll facing) ──────────────────────────────────
+  const rootYaw = createRootYaw({ getElapsedMs: () => elapsed * 1000 });
+
   // ── Emotion crossfade ─────────────────────────────────────────────────
   // Owns the in-flight crossfade + resolver + per-model has-expression predicate.
   const emotion: EmotionCrossfade = createEmotionCrossfade({
@@ -634,24 +201,6 @@ export function createRenderer(options: RendererOptions): Renderer {
     registry: options.emotionRegistry,
     log,
   });
-
-  /** One frame of the root-yaw ease, written absolutely onto the model's base rotation. */
-  function stepBodyYaw(): void {
-    if (!currentVrm) return;
-    if (bodyYawConverging) {
-      const t = elapsed * 1000 - bodyYawStartMs;
-      bodyYaw = yawAt(bodyYawFrom, bodyYawTo, t, bodyYawDurationMs);
-      if (t >= bodyYawDurationMs) bodyYawConverging = false;
-    }
-    currentVrm.scene.rotation.y = baseYaw + bodyYaw;
-  }
-
-  /** True while a non-baseline motion clip is actively playing via the mixer. */
-  function isMotionActive(): boolean {
-    if (!currentAction?.isRunning()) return false;
-    const id = controller?.current()?.id;
-    return id != null && id !== controller?.baseline();
-  }
 
   // ── VrmParticipant unification ──────────────────────────────────────────
   // pins/gaze/emotion/mouth share the same per-frame lifecycle (adopt on load,
@@ -672,19 +221,19 @@ export function createRenderer(options: RendererOptions): Renderer {
     const active =
       isActive({
         participantsConverging: anyConverging(participants),
-        motionActive: isMotionActive(),
+        motionActive: motion.isConverging(),
       }) ||
-      orbitConverging ||
-      bodyYawConverging;
+      rig.isConverging() ||
+      rootYaw.isConverging();
     const now = performance.now();
     if (!shouldRenderFrame(now, lastRenderMs, active, IDLE_FPS, idleThrottleEnabled)) return;
     lastRenderMs = now;
 
     const dt = clock.getDelta();
     // Ease the orbit polar toward its target (free, or perched-clamped) and re-fit.
-    // Independent of the VRM — fitCamera no-ops without a model — so the camera settles
+    // Independent of the VRM — rig.fit no-ops without a model — so the camera settles
     // even between loads. Cheap when already settled (no re-fit).
-    stepOrbit();
+    rig.step();
     if (currentVrm) {
       elapsed += dt;
       const ctx: TickContext = { vrm: currentVrm, dt, elapsed };
@@ -699,14 +248,8 @@ export function createRenderer(options: RendererOptions): Renderer {
         }
       }
       // Mixer first — after bone update, vrm.update applies spring/expression.
-      if (mixer) {
-        try {
-          mixer.update(dt);
-        } catch (err) {
-          log.error("mixer_update_error", { error: String(err) });
-        }
-      }
-      stepBodyYaw();
+      motion.step(ctx);
+      rootYaw.step(ctx);
       // pins/gaze (bones) then emotion/mouth (expression weights) — all before
       // vrm.update so expressionManager.update()/spring bones see this frame's writes.
       stepParticipants(participants, ctx);
@@ -739,32 +282,9 @@ export function createRenderer(options: RendererOptions): Renderer {
   }
   document.addEventListener("visibilitychange", onVisibilityChange);
 
-  /** Tear down mixer/clip/action cache + controller state (shared hotswap/dispose). */
-  function teardownMotion(): void {
-    cycleDwell.cancel(); // prevent stale swap on mixer being disposed.
-    motionStartGeneration.invalidate();
-    if (mixer) {
-      mixer.removeEventListener("finished", onMixerFinished as never);
-      mixer.stopAllAction();
-      if (currentVrm) mixer.uncacheRoot(currentVrm.scene);
-      mixer = undefined;
-    }
-    clipCache.clear();
-    clipTravelY.clear();
-    clipRootCurve.clear();
-    clipRootCurveX.clear();
-    restHipsY = undefined;
-    motionMirror = false;
-    boneNameSwap.clear();
-    actionToId.clear();
-    currentAction = undefined;
-    // Controller has no simple no-op reset, so recreate to empty current/queue.
-    // (Clips are VRM-specific so idle baseline must be replayed on next VRM anyway.)
-    if (motionRegistry) controller = newMotionController(motionRegistry);
-  }
-
   function disposeCurrent(): void {
-    teardownMotion();
+    motion.onVrmDisposed();
+    clips.onVrmDisposed();
     // Drop each participant's VRM-bound state (reset in-flight fade/bone refs/damped
     // state) so nothing carries to the next VRM or writes to the disposed one.
     notifyVrmDisposed(participants);
@@ -773,212 +293,8 @@ export function createRenderer(options: RendererOptions): Renderer {
       VRMUtils.deepDispose(currentVrm.scene);
       currentVrm = undefined;
     }
-    modelBox = undefined; // drop stale bounds so fitCamera no-ops until next load.
+    modelBox = undefined; // drop stale bounds so rig.fit no-ops until next load.
     alphaHitTest.clearGrab(); // stale silhouette can't outlive its VRM.
-  }
-
-  /** Cache key of a registry id's representative clip, under the live mirror state. */
-  function registryClipKey(id: string): string | null {
-    const entry = motionRegistry?.[id];
-    if (!entry) return null;
-    return clipCacheKey(entry.vrma_path, motionMirror, !!entry.root_lock_y, !!entry.root_lock_xz);
-  }
-
-  /**
-   * vrma_path → AnimationClip (current VRM only). Returns immediately on cache hit.
-   * Load .vrma via GLTFLoader + VRMAnimationLoaderPlugin → gltf.userData.vrmAnimations[0]
-   * → createVRMAnimationClip(vrmAnimation, currentVrm) (three-vrm-animation official path).
-   */
-  async function loadClip(
-    vrmaPath: string,
-    mirrored: boolean,
-    rootLockY = false,
-    rootLockXz = false,
-  ): Promise<THREE.AnimationClip | null> {
-    const cacheKey = clipCacheKey(vrmaPath, mirrored, rootLockY, rootLockXz);
-    const cached = clipCache.get(cacheKey);
-    if (cached) return cached;
-    if (!currentVrm) return null;
-
-    if (mirrored) {
-      const upright = await loadClip(vrmaPath, false, rootLockY, rootLockXz);
-      if (!upright) return null;
-      const clip = mirrorClipTracks(upright, boneNameSwap);
-      clipCache.set(cacheKey, clip);
-      // Mirroring swaps left/right bones; the vertical travel and its curve are the upright clip's.
-      const uprightKey = clipCacheKey(vrmaPath, false, rootLockY, rootLockXz);
-      clipTravelY.set(cacheKey, clipTravelY.get(uprightKey) ?? 0);
-      const curve = clipRootCurve.get(uprightKey);
-      if (curve) clipRootCurve.set(cacheKey, curve);
-      // A mirrored body walks the other way: negate the floor-path X the mover will replay.
-      const xCurve = clipRootCurveX.get(uprightKey);
-      if (xCurve)
-        clipRootCurveX.set(cacheKey, {
-          times: xCurve.times,
-          values: xCurve.values.map((v) => -v),
-        });
-      return clip;
-    }
-
-    if (deadClips.isDead(vrmaPath)) return null;
-    const epoch = vrmEpoch;
-    let gltf: Awaited<ReturnType<typeof loader.loadAsync>>;
-    try {
-      gltf = await loader.loadAsync(vrmaPath);
-    } catch (err) {
-      // Fetch/parse failure is asset-permanent (above all an unshipped purchased motion,
-      // where the app serves index.html instead) — warn once, never refetch.
-      deadClips.markDead(vrmaPath, err);
-      return null;
-    }
-    // If hotswap happened during load, discard.
-    if (epoch !== vrmEpoch || !currentVrm) return null;
-
-    const vrmAnimations = gltf.userData.vrmAnimations as unknown[] | undefined;
-    const vrmAnimation = vrmAnimations?.[0];
-    if (vrmAnimation == null) {
-      deadClips.markDead(vrmaPath, "vrma_no_animations");
-      return null;
-    }
-    const clip = createVRMAnimationClip(vrmAnimation as never, currentVrm);
-    // A clip whose locomotion IS the movement plays in place; the mover supplies the
-    // floor path. Mean-recentering would leave relative XZ travel in the track and the
-    // pet would walk off the canvas, so xz-lock replaces it rather than composing.
-    if (rootLockXz) {
-      const locked = detrendClipRootXZ(clip);
-      if (locked.curve) clipRootCurveX.set(cacheKey, locked.curve);
-      log.debug("clip.root_locked_xz", {
-        vrma_path: vrmaPath,
-        travelX: locked.travelX,
-        keys: locked.curve?.times.length ?? 0,
-      });
-    } else {
-      recenterClipRootMotion(clip); // strip baked horizontal root drift so the pet stays centered.
-    }
-    // A clip whose rise IS the movement plays in place; the mover supplies the travel,
-    // following the curve the clip had rather than a straight line through it.
-    if (rootLockY) {
-      const locked = detrendClipRootY(clip, restHipsY);
-      clipTravelY.set(cacheKey, locked.travel);
-      if (locked.curve) clipRootCurve.set(cacheKey, locked.curve);
-      log.debug("clip.root_locked", {
-        vrma_path: vrmaPath,
-        travel: locked.travel,
-        shift: locked.shift,
-        keys: locked.curve?.times.length ?? 0,
-      });
-    } else {
-      clipTravelY.set(cacheKey, 0);
-    }
-    clipCache.set(cacheKey, clip);
-    return clip;
-  }
-
-  /**
-   * Actually play resolved motion (load clip → compose action → crossfade).
-   * controller.commit is performed by caller (playMotion/finish) with the decision.
-   */
-  async function startMotion(motion: ResolvedMotion): Promise<void> {
-    const startToken = motionStartGeneration.begin();
-    const mirrored = motionMirror;
-    // Single play sink — cancel any pending dwell swap for new motion (prevents interrupt delay/stale swap).
-    cycleDwell.cancel();
-    if (!currentVrm || !mixer) return;
-    const epoch = vrmEpoch;
-    try {
-      let clip = await loadClip(
-        motion.vrma_path,
-        mirrored,
-        motion.root_lock_y,
-        motion.root_lock_xz,
-      );
-      if (!motionStartGeneration.isCurrent(startToken)) return;
-      if (!clip) {
-        // Real load failure (clip missing/invalid for the live VRM) → fall back to idle.
-        // A hotswap/teardown drop (epoch changed / no vrm / no mixer) just returns silently.
-        if (epoch === vrmEpoch && currentVrm && mixer) fallbackToBaseline(motion.id);
-        return;
-      }
-      if (!mixer || epoch !== vrmEpoch) return;
-
-      log.debug("start_motion", { id: motion.id, vrma_path: motion.vrma_path });
-
-      const fadeMs = Math.max(0, motion.fade_ms);
-      const prev = currentAction;
-      clip = playbackClip(
-        motion.vrma_path,
-        mirrored,
-        prev ? prev.getClip() : null,
-        fadeMs,
-        clipCache,
-        motion.root_lock_y,
-        motion.root_lock_xz,
-      );
-
-      const action = mixer.clipAction(clip);
-      action.timeScale = motion.speed;
-      if (motion.loop && !motion.cycle) {
-        // plain loop or single-variant pingpong (continuous).
-        action.setLoop(motion.pingpong ? THREE.LoopPingPong : THREE.LoopRepeat, Infinity);
-        action.clampWhenFinished = false;
-      } else {
-        // oneshot or cycle: if pingpong then after 2N reps, otherwise once then controller.finish via finished.
-        action.setLoop(
-          motion.pingpong ? THREE.LoopPingPong : THREE.LoopOnce,
-          motion.pingpong ? motion.loop_reps : 1,
-        );
-        action.clampWhenFinished = true;
-        actionToId.set(action, motion.id);
-      }
-      // The outgoing action keeps advancing during the fade and can still cross its own
-      // clip end, dispatching a stale "finished" for it once a new motion has replaced it.
-      if (prev && prev !== action) actionToId.delete(prev);
-
-      const fade = fadeMs / 1000;
-      action.reset();
-      action.enabled = true;
-      if (prev && prev !== action && fade > 0) {
-        action.crossFadeFrom(prev, fade, false).play();
-      } else {
-        if (prev && prev !== action) prev.stop();
-        if (fade > 0) action.fadeIn(fade);
-        action.play();
-      }
-      currentAction = action;
-      if (motion.kind === "state") lastStateMotionId = motion.id;
-    } catch (err) {
-      log.error("start_motion", { error: String(err) });
-      // Loader threw for the live VRM → recover to idle. Drops (hotswap/teardown) return silently.
-      if (
-        motionStartGeneration.isCurrent(startToken) &&
-        epoch === vrmEpoch &&
-        currentVrm &&
-        mixer
-      ) {
-        fallbackToBaseline(motion.id);
-      }
-    }
-  }
-
-  /**
-   * A motion's clip failed to load → repair controller state to idle and (re)play it.
-   * playMotion commits before the async load, so a failed clip leaves current +
-   * previousStable pinned at the dead id and a later idle blocked by priority;
-   * force-committing idle (motion-fallback) overwrites both. Recursion guard: idle's
-   * own failure resolves to null and no-ops. Honors public/purchased_motions/AGENTS.md.
-   */
-  function fallbackToBaseline(failedId: string): void {
-    if (!controller) return;
-    log.warn("motion_fallback_to_idle", { failed_id: failedId });
-    const idle = resolveBaselineFallback(controller, failedId);
-    if (idle) void startMotion(idle);
-  }
-
-  /** If registry exists, lay down baseline so ambient always plays. */
-  function playIdleBaseline(): void {
-    if (!controller) return;
-    const held = pins.isPerched() || pins.isPeeking();
-    playMotion({ id: baselineWhileHeld(held, lastStateMotionId, controller.baseline()) });
   }
 
   // Read display name from VRM meta — VRM1.0 uses meta.name, VRM0.0 uses meta.title. null if neither.
@@ -988,20 +304,6 @@ export function createRenderer(options: RendererOptions): Renderer {
     if (typeof raw !== "string") return null;
     const trimmed = raw.trim();
     return trimmed.length > 0 ? trimmed : null;
-  }
-
-  function rebuildBoneNameSwap(vrm: VRM): void {
-    boneNameSwap.clear();
-    for (const leftName of VRMHumanBoneList) {
-      if (!leftName.startsWith("left")) continue;
-      const rightName = `right${leftName.slice(4)}` as VRMHumanBoneName;
-      const leftNode = vrm.humanoid?.getNormalizedBoneNode(leftName);
-      const rightNode = vrm.humanoid?.getNormalizedBoneNode(rightName);
-      if (!leftNode || !rightNode) continue;
-      boneNameSwap.set(leftNode.name, rightNode.name);
-      boneNameSwap.set(rightNode.name, leftNode.name);
-    }
-    if (boneNameSwap.size === 0) log.warn("bone_name_swap_empty");
   }
 
   async function loadVRM(url: string): Promise<VrmLoadResult> {
@@ -1017,25 +319,19 @@ export function createRenderer(options: RendererOptions): Renderer {
     VRMUtils.rotateVRM0(vrm); // If VRM0.0, rotate to +Z front; VRM1.0 is no-op.
 
     disposeCurrent(); // Hotswap: prepare new model fully, then release prior.
-    // The model's own front-facing rotation is the baseline the stroll yaw adds onto.
-    baseYaw = vrm.scene.rotation.y;
-    bodyYaw = 0;
-    bodyYawConverging = false;
-    vrmEpoch += 1; // Invalidate async clip loads tied to prior model.
+    rootYaw.onVrmLoaded(vrm);
     currentVrm = vrm;
     scene.add(vrm.scene);
 
     // Adopt the VRM: cache bones, claim lookAt, recompute the per-model emotion
     // predicate/resolver — each participant's own onVrmLoaded, in fixed order.
     notifyVrmLoaded(participants, vrm);
-    rebuildBoneNameSwap(vrm);
+    clips.onVrmLoaded(vrm);
 
     // Full-body fit-to-bounds: measure in rest pose, before idle animates the arms.
     vrm.scene.updateWorldMatrix(true, true);
     modelBox = new THREE.Box3().setFromObject(vrm.scene);
-    // Same moment, same reason: a root-locked clip rests its hips on this height.
-    restHipsY = pins.hipsBone()?.getWorldPosition(new THREE.Vector3()).y;
-    fitCamera();
+    rig.fit();
 
     // observability: surface available expressions + whether the lipsync mouth key exists.
     const exprInfo = describeExpressions(currentVrm.expressionManager);
@@ -1050,91 +346,9 @@ export function createRenderer(options: RendererOptions): Renderer {
       });
     }
 
-    // New mixer for this VRM (clips are VRM-specific so start fresh).
-    mixer = new THREE.AnimationMixer(vrm.scene);
-    mixer.addEventListener("finished", onMixerFinished as never);
-
-    playIdleBaseline(); // If registry exists, auto-play idle ambient.
+    motion.onVrmLoaded(vrm); // New mixer for this VRM; if a registry exists, auto-play idle ambient.
 
     return { metaName: readVrmMetaName(vrm) };
-  }
-
-  /** playMotion implementation — request → (play/queue/ignore) → commit + actual playback. */
-  function playMotion(motion: RenderMotionSignal | null): void {
-    if (!controller) {
-      log.warn("play_motion_no_registry");
-      return;
-    }
-    if (!currentVrm || !mixer) return; // Playback not possible if VRM not loaded.
-    const perched = pins.isPerched();
-    const peeking = pins.isPeeking();
-    if (
-      leaveSeatForOneshot &&
-      motion &&
-      shouldLeaveSeatForMotion(
-        motion,
-        perched,
-        (id) => motionRegistry?.[id]?.kind,
-        (id) => motionRegistry?.[id]?.broker_publish !== false,
-      ) &&
-      leaveSeatForOneshot(motion)
-    ) {
-      return;
-    }
-    if (suppressWhileHeld(motion, perched || peeking, (id) => motionRegistry?.[id]?.kind)) {
-      if (motion) {
-        log.info("motion_dropped_held_posture", {
-          id: motion.id,
-          posture: perched ? "sitting" : "peeking",
-        });
-      }
-      return;
-    }
-    try {
-      const decision = controller.request(motion);
-      controller.commit(decision);
-      if (decision.action === "play") {
-        void startMotion(decision.motion);
-      }
-      // "queue" is stored in slot via commit — drained on finish.
-      // "ignore" is no-op.
-    } catch (err) {
-      log.error("play_motion", { error: String(err) });
-    }
-  }
-
-  function upsertMotion(id: string, entry: MotionRegistryEntry): void {
-    motionRegistry = { ...(motionRegistry ?? {}), [id]: entry };
-    controller = newMotionController(motionRegistry);
-  }
-
-  function setMotionRegistry(registry: MotionRegistry): void {
-    const playing = controller?.current() ?? null;
-    motionRegistry = registry;
-    controller = newMotionController(registry);
-    if (!currentVrm || !mixer) return;
-    if (playbackAfterRegistrySwap(playing, registry) === "keep" && playing) {
-      controller.commit({ action: "play", motion: playing });
-      return;
-    }
-    playIdleBaseline();
-  }
-
-  function setIdleVariants(paths: readonly string[]): void {
-    const previous = idleVariants;
-    const next = [...paths];
-    idleVariants = next;
-    if (!poolSelectionChanged(previous, next)) return;
-    // Nothing is playable before a VRM+mixer exist, so no motion can be stuck yet.
-    const playing = currentVrm && mixer ? (controller?.current() ?? null) : null;
-    if (shouldRestartIdle(previous, next, playing, IDLE_POOL_ID)) {
-      // A pool of one loops without ever finishing — only a replay picks the change up.
-      playIdleBaseline();
-      return;
-    }
-    // Otherwise the change rides the next re-resolve. Drop the cached return target so a motion
-    // playing over the pool cannot restore a resolution captured before the change.
-    controller?.invalidatePool(IDLE_POOL_ID);
   }
 
   /** setEmotion — delegate to emotion crossfade (stable reference for routeDirective). */
@@ -1151,54 +365,9 @@ export function createRenderer(options: RendererOptions): Renderer {
     emotion.setRegistry(registry);
   }
 
-  /** setFraming implementation — merge only given keys (omitted retain defaults), then refit. */
-  function setFraming(next: { margin?: number; fov?: number }): void {
-    framing = {
-      margin: next.margin ?? framing.margin,
-      fov: next.fov ?? framing.fov,
-    };
-    fitCamera();
-  }
-
   function setViewWindow(next: ViewWindow | null): void {
-    view = next;
+    rig.setViewWindow(next);
     resize();
-  }
-
-  /** setZoom implementation — ignore non-finite/identical, otherwise update zoom then refit. */
-  function setZoom(z: number): void {
-    if (!Number.isFinite(z)) return;
-    if (z === zoom) return;
-    zoom = z;
-    fitCamera();
-  }
-
-  /**
-   * setOrbit implementation — azimuth applies immediately (refit); polar is saved as free value and
-   * orbitConverging is enabled to ease effectivePolar toward desiredPolar (stepOrbit converges each frame). Non-finite ignored.
-   */
-  function setOrbit(angles: OrbitAngles): void {
-    const az = Number.isFinite(angles.azimuth) ? angles.azimuth : azimuth;
-    const pol = Number.isFinite(angles.polar) ? angles.polar : polar;
-    if (az === azimuth && pol === polar) return;
-    azimuth = az;
-    polar = pol;
-    orbitConverging = true; // ease effectivePolar toward the (possibly perched-clamped) target.
-    fitCamera(); // apply the azimuth change immediately.
-  }
-
-  function liveCharacterHeight(head: THREE.Object3D, w: number, h: number): number | null {
-    const liveBox = currentVrm ? liveBoxScratch.setFromObject(currentVrm.scene) : null;
-    const box = liveBox && !liveBox.isEmpty() ? liveBox : modelBox;
-    if (!box) return null;
-    liveFeetScratch.set((box.min.x + box.max.x) / 2, box.min.y, (box.min.z + box.max.z) / 2);
-    return characterScreenHeight(
-      head.getWorldPosition(liveHeadScratch),
-      liveFeetScratch,
-      camera,
-      w,
-      h,
-    );
   }
 
   return {
@@ -1211,7 +380,7 @@ export function createRenderer(options: RendererOptions): Renderer {
     },
     applyDirective(env) {
       // route emotion/motion into setEmotion/playMotion per render rules.
-      routeDirective(env, { setEmotion, playMotion });
+      routeDirective(env, { setEmotion, playMotion: motion.playMotion });
     },
     setEmotion,
     easeEmotionToNeutral,
@@ -1221,35 +390,31 @@ export function createRenderer(options: RendererOptions): Renderer {
     stopMouth() {
       mouth.stop();
     },
-    playMotion,
-    setLeaveSeatForOneshot(handler) {
-      leaveSeatForOneshot = handler;
-    },
+    playMotion: motion.playMotion,
+    setLeaveSeatForOneshot: motion.setLeaveSeatForOneshot,
     getCurrentMotion() {
-      const cur = controller?.current();
+      const cur = motion.current();
       return cur ? { id: cur.id, vrma_path: cur.vrma_path } : null;
     },
     currentMotionKind() {
-      return controller?.current()?.kind ?? null;
+      return motion.current()?.kind ?? null;
     },
-    upsertMotion,
-    setMotionRegistry,
-    setIdleVariants,
+    upsertMotion(id, entry) {
+      motionRegistry = { ...(motionRegistry ?? {}), [id]: entry };
+      motion.upsert(id, entry);
+    },
+    setMotionRegistry(registry) {
+      motionRegistry = registry;
+      motion.setRegistry(registry);
+    },
+    setIdleVariants: motion.setIdleVariants,
     setEmotionRegistry,
-    setFraming,
+    setFraming: rig.setFraming,
     setViewWindow,
-    setZoom,
-    setOrbit,
-    getCharacterAnchor() {
-      if (!modelBox) return null;
-      camera.updateMatrixWorld();
-      return projectFeetAnchor(modelBox, camera, mount.clientWidth || 1, mount.clientHeight || 1);
-    },
-    getCharacterWidthPx() {
-      if (!modelBox) return null;
-      camera.updateMatrixWorld();
-      return projectBoxWidthPx(modelBox, camera, mount.clientWidth || 1);
-    },
+    setZoom: rig.setZoom,
+    setOrbit: rig.setOrbit,
+    getCharacterAnchor: probes.getCharacterAnchor,
+    getCharacterWidthPx: probes.getCharacterWidthPx,
     hitTest(x, y) {
       const stage = clientToStage(x, y, mountRect);
       return alphaHitTest.hitTest(stage.x, stage.y);
@@ -1257,75 +422,18 @@ export function createRenderer(options: RendererOptions): Renderer {
     setHitTestThreshold(threshold) {
       alphaHitTest.setThreshold(threshold);
     },
-    getPerchProbe() {
-      if (!currentVrm) return null;
-      const head = currentVrm.humanoid?.getNormalizedBoneNode("head");
-      const hips = pins.hipsBone();
-      if (!head || !hips) return null;
-      const w = mount.clientWidth || 1;
-      const h = mount.clientHeight || 1;
-      camera.updateMatrixWorld();
-
-      // Seat: live hips (+SEAT_DROP) → pet-window px (mirrors getCharacterAnchor's project path).
-      const hipsWorld = hips.getWorldPosition(new THREE.Vector3());
-      const seat = seatAnchorWorld(hipsWorld, SEAT_DROP);
-      const seatPx = projectToScreen(seat, camera, w, h);
-      if (!seatPx) return null;
-
-      const charHpx = liveCharacterHeight(head, w, h);
-      if (charHpx === null) return null;
-
-      return { seatPx: { x: seatPx.x, y: seatPx.y }, charHpx };
-    },
-    getTapPoints() {
-      if (!currentVrm) return null;
-      const humanoid = currentVrm.humanoid;
-      const head = humanoid?.getNormalizedBoneNode("head");
-      if (!head) return null;
-      const w = mount.clientWidth || 1;
-      const h = mount.clientHeight || 1;
-      camera.updateMatrixWorld();
-      const charHpx = liveCharacterHeight(head, w, h);
-      if (charHpx === null || !Number.isFinite(charHpx) || charHpx <= 0) return null;
-      const project = (bone: THREE.Object3D | null | undefined) =>
-        bone ? projectToScreen(bone.getWorldPosition(new THREE.Vector3()), camera, w, h) : null;
-      const chest =
-        humanoid?.getNormalizedBoneNode("upperChest") ?? humanoid?.getNormalizedBoneNode("chest");
-      return {
-        head: project(head),
-        chest: project(chest),
-        hips: project(pins.hipsBone()),
-        charHpx,
-      };
-    },
-    getHandAnchors() {
-      if (!currentVrm) return null;
-      const humanoid = currentVrm.humanoid;
-      const left = humanoid?.getNormalizedBoneNode("leftHand");
-      const right = humanoid?.getNormalizedBoneNode("rightHand");
-      if (!left || !right) return null;
-      const w = mount.clientWidth || 1;
-      const h = mount.clientHeight || 1;
-      camera.updateMatrixWorld();
-      const project = (bone: THREE.Object3D) =>
-        projectToScreen(bone.getWorldPosition(new THREE.Vector3()), camera, w, h);
-      const leftPx = project(left);
-      const rightPx = project(right);
-      if (!leftPx || !rightPx) return null;
-      return {
-        left: { x: leftPx.x, y: leftPx.y },
-        right: { x: rightPx.x, y: rightPx.y },
-      };
-    },
+    getPerchProbe: probes.getPerchProbe,
+    getTapPoints: probes.getTapPoints,
+    getHandAnchors: probes.getHandAnchors,
     setPerchTarget(target) {
       const changed = pins.setPerchTarget(target);
       if (!changed) return;
       if (target === null) {
-        orbitConverging = true; // ease the polar back to the stored free angle.
-        playMotion(null); // perch cleared — explicit return to idle baseline.
+        rig.startEase(); // ease the polar back to the stored free angle.
+        motion.playMotion(null); // perch cleared — explicit return to idle baseline.
         return;
       }
-      orbitConverging = true; // ease the polar into the perched [60°,120°] band.
+      rig.startEase(); // ease the polar into the perched [60°,120°] band.
     },
     isPerched() {
       return pins.isPerched();
@@ -1336,69 +444,21 @@ export function createRenderer(options: RendererOptions): Renderer {
     setPeekTarget(target) {
       const changed = pins.setPeekTarget(target);
       if (!changed) return;
-      if (target === null) playMotion(null);
+      if (target === null) motion.playMotion(null);
     },
     setMotionMirror(on) {
-      motionMirror = on;
+      clips.setMirror(on);
     },
     setBodyYaw(rad, easeMs) {
-      if (!Number.isFinite(rad)) return;
-      bodyYawFrom = bodyYaw;
-      bodyYawTo = rad;
-      bodyYawStartMs = elapsed * 1000;
-      bodyYawDurationMs = Number.isFinite(easeMs) ? Math.max(0, easeMs) : 0;
-      bodyYawConverging = true;
+      rootYaw.setTarget(rad, easeMs);
     },
-    getPxPerMetre() {
-      if (!currentVrm || !modelBox) return null;
-      camera.updateMatrixWorld();
-      // Measured at the feet — the same point the floor gate and the stroll travel on.
-      const { min, max } = modelBox;
-      const depth = pxPerMetreScratch
-        .set((min.x + max.x) / 2, min.y, (min.z + max.z) / 2)
-        .sub(camera.position)
-        .dot(camera.getWorldDirection(pxPerMetreForward));
-      const perPixel = worldYPerPixel(camera, depth, mount.clientHeight || 1);
-      return Number.isFinite(perPixel) && perPixel > 0 ? 1 / perPixel : null;
-    },
-    getMotionDuration(id) {
-      const key = registryClipKey(id);
-      const clip = key ? clipCache.get(key) : undefined;
-      return clip ? clip.duration : null;
-    },
-    getMotionTravelY(id) {
-      const key = registryClipKey(id);
-      if (!key || !clipCache.has(key)) return null;
-      return clipTravelY.get(key) ?? 0;
-    },
-    getMotionTravelAt(id, timeS) {
-      const key = registryClipKey(id);
-      if (!key || !clipCache.has(key)) return null;
-      const curve = clipRootCurve.get(key);
-      return curve ? sampleRootYCurve(curve, timeS) : 0;
-    },
-    getMotionTravelXAt(id, timeS) {
-      const key = registryClipKey(id);
-      if (!key || !clipCache.has(key)) return null;
-      const curve = clipRootCurveX.get(key);
-      return curve ? sampleRootYCurve(curve, timeS) : null;
-    },
-    getCurrentMotionTime() {
-      const current = controller?.current();
-      if (!current || !currentAction) return null;
-      const key = registryClipKey(current.id);
-      if (!key) return null;
-      // A start is asynchronous, so the action can still be holding the previous clip —
-      // its playhead would be a different clip's. The crossfade clone counts as ours.
-      const playing = currentAction.getClip();
-      if (playing !== clipCache.get(key) && playing !== clipCache.get(`${key}#xfade`)) return null;
-      return currentAction.time;
-    },
-    async preloadMotion(id) {
-      const entry = motionRegistry?.[id];
-      if (!entry) return;
-      await loadClip(entry.vrma_path, motionMirror, !!entry.root_lock_y, !!entry.root_lock_xz);
-    },
+    getPxPerMetre: probes.getPxPerMetre,
+    getMotionDuration: clips.duration,
+    getMotionTravelY: clips.travelY,
+    getMotionTravelAt: clips.travelAt,
+    getMotionTravelXAt: clips.travelXAt,
+    getCurrentMotionTime: motion.currentTime,
+    preloadMotion: clips.preload,
     setIdleThrottleEnabled(enabled) {
       idleThrottleEnabled = enabled;
     },

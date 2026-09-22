@@ -1,0 +1,207 @@
+---
+name: yui-platform-install
+description: "Install, verify or repair the yui platform plugin on a Hermes host — the WebSocket a YUI client connects to. Triggers on a first install, a client that cannot connect, a socket closing with 4401, a reply spoken with no expression, or a character that calls a motion it has unavailable."
+version: 0.1.0
+author: yw0nam
+platforms: [linux, macos]
+prerequisites:
+  commands: [git, hermes, python3]
+metadata:
+  hermes:
+    tags: [yui, platform, push, install, websocket]
+---
+
+# yui platform install
+
+Installs the platform plugin at `integrations/hermes/platform/yui/` in the YUI repository. It
+serves the WebSocket a YUI client opens, turns each `turn` frame into a gateway message, and sends
+the agent's reply back as a `render` frame.
+
+Run the steps in order. Each ends with a check that is a command and its expected output; when one
+fails, stop there and report it. Link the plugin, so `git pull` in the checkout updates it in
+place.
+
+Repairing rather than installing: the symptom table below names the step that owns each failure.
+
+Replace `$YUI` with the absolute path of the YUI checkout and `<profile>` with the Hermes profile
+name. Every `hermes` command takes `-p <profile>`; without it the CLI acts on the global
+`~/.hermes` store.
+
+## 1. Checkout
+
+```bash
+cd $YUI && git pull --ff-only
+grep '^kind:' integrations/hermes/platform/yui/plugin.yaml
+```
+
+Check: prints `kind: platform`.
+
+## 2. Link the plugin
+
+The gateway reads plugins from `~/.hermes/plugins/` and from
+`~/.hermes/profiles/<profile>/plugins/`. The profile directory keeps the plugin off every other
+profile on the host:
+
+```bash
+mkdir -p ~/.hermes/profiles/<profile>/plugins
+ln -sfn $YUI/integrations/hermes/platform/yui ~/.hermes/profiles/<profile>/plugins/yui
+ls -L ~/.hermes/profiles/<profile>/plugins/yui/plugin.yaml
+```
+
+The plugin id is the `name` in `plugin.yaml`, and when two directories under `plugins/` carry the
+same name the one that sorts last is loaded. A backup copy such as `plugins/yui.bak` runs in place of
+the link, so keep backups outside `plugins/`.
+
+Check: the `ls` prints the path.
+
+## 3. Configure the platform
+
+Three top-level blocks in `~/.hermes/profiles/<profile>/config.yaml`:
+
+```yaml
+platforms:
+  yui:
+    enabled: true
+    extra:
+      host: 127.0.0.1
+      port: 8646
+
+platform_toolsets:
+  yui: [hermes-cli, delegation, yui]
+
+plugins:
+  enabled:
+    - yui
+```
+
+`platform_toolsets.yui` is what puts `generate_express` in front of the model. A platform left out
+of it falls back to a default toolset, and its replies arrive as speech with no cues.
+
+MCP servers reach the yui platform through the same list. When `platform_toolsets.yui` names no MCP
+server the platform gets every enabled MCP server, when it names one or more it gets only those, and
+`no_mcp` gives it none. The list above names no MCP server, so a profile that carries the Expression
+Broker MCP server hands the broker to the yui platform. Name the MCP servers the character uses, as in
+`yui: [hermes-cli, delegation, yui, <other MCP server>]`, or add `no_mcp` when it uses none, as in
+`yui: [hermes-cli, delegation, yui, no_mcp]`. On the yui platform the broker's `get_ids` can answer
+with a vocabulary that differs from the one the client sent in `hello`, and a cue sent through the
+broker's `generate_express` never reaches a `render` frame. Saving this platform's tools from Hermes's
+tool settings removes `no_mcp` and keeps named MCP servers, so run the second check below after that.
+
+The plugin's [`docs/install.md`](../../docs/install.md) carries what each `extra` key means and what
+to change for a host other than loopback.
+
+```bash
+python3 -c "import yaml,os;d=yaml.safe_load(open(os.path.expanduser('~/.hermes/profiles/<profile>/config.yaml')));print(d['platforms']['yui']['enabled'],d['platform_toolsets']['yui'],'yui' in d['plugins']['enabled'])"
+```
+
+Check: prints `True`, a list that holds `hermes-cli`, `delegation` and `yui`, and `True`.
+
+```bash
+python3 -c "import yaml,os;d=yaml.safe_load(open(os.path.expanduser('~/.hermes/profiles/<profile>/config.yaml')));y=[str(t) for t in d['platform_toolsets']['yui']];m={str(k) for k,v in (d.get('mcp_servers') or {}).items() if isinstance(v,dict) and str(v.get('enabled',True)).strip().lower() not in ('false','0','no','off')};print(sorted(set() if 'no_mcp' in y else (m&set(y) or m)))"
+```
+
+Check: the printed MCP servers the yui platform gets leave out the key the profile's `mcp_servers`
+gives the Expression Broker. MCP servers a plugin registers are outside this check.
+
+## 4. Set the key
+
+A `hello` on a loopback `host` is accepted with no key set, and a `host` reachable from elsewhere
+is refused until one is set. Set it under the same `extra` block, to the value the client sends:
+
+```yaml
+      extra:
+        key: "<the value the client sends>"
+```
+
+`YUI_PLATFORM_KEY` in the profile `.env` sets it from the environment instead.
+
+Check: step 7's ready line appears. A socket closing with `4401` is this step.
+
+## 5. Keep the reply free of gateway text
+
+This client speaks its replies aloud, so `show_reasoning: false` keeps the reasoning out of the
+spoken reply. It is required:
+
+```yaml
+display:
+  platforms:
+    yui:
+      show_reasoning: false
+```
+
+```bash
+python3 -c "import yaml,os;d=yaml.safe_load(open(os.path.expanduser('~/.hermes/profiles/<profile>/config.yaml')));print(d['display']['platforms']['yui']['show_reasoning'])"
+```
+
+Check: prints `False`.
+
+The runtime footer is off by default, and its switch is global to the gateway at
+`display.runtime_footer.enabled`. Turned on, the footer is concatenated into the reply text and
+the model name and working directory get spoken, so a host that turned it on sets it back to
+`false`.
+
+A client that shows a reasoning chip wants the live stream as well, one switch global to the
+gateway:
+
+```yaml
+plugins:
+  stream_reasoning_deltas: true
+```
+
+With it on the `render` frame carries the streamed text; with it off it carries no `reasoning`.
+
+## 6. Restart the gateway
+
+The gateway imports the platform adapter at startup, so a fresh link or a config change takes
+effect on the next start. The restart ends every running turn, including the one that issues it,
+so answer first and issue it detached:
+
+```bash
+setsid nohup sh -c 'sleep 30; hermes -p <profile> gateway restart' >/dev/null 2>&1 &
+sleep 45 && ss -ltn | grep :8646
+```
+
+Check: the `grep` prints a listening line.
+
+An agent that runs inside this gateway cannot restart it: its shell tool refuses the detached
+wrapper, and a foreground restart dies with the gateway it stops. Report the link and config
+changes and leave the restart to the operator.
+
+## 7. Point the client at it and send one turn
+
+In the client set `chat_api` to `push` and `chat_base_url` to this server, in
+`configs/endpoints.json` or from the settings panel's chat provider dropdown. The client appends
+the path: `http://host:8646` gives `ws://host:8646/ws`, and `https://host:8646` gives
+`wss://host:8646/ws`.
+
+Send one message, then read the gateway log:
+
+```bash
+grep -E "client ready|turn accepted" ~/.hermes/profiles/<profile>/logs/gateway.log | tail -3
+```
+
+Check: a `yui: client ready chat=yui-<id>` line, then a `yui: turn accepted chat=… turn_id=…
+chars=…` line carrying the turn id the client sent. The character speaks the reply with an
+expression.
+
+## Symptoms
+
+| What you see | Step that owns it |
+|---|---|
+| The socket closes with `4401` | 4 |
+| The reply is spoken flat, with no expression or motion | 3, `platform_toolsets.yui` |
+| The character says a motion or expression it has is unavailable, or a reply carries no cues, and `logs/agent.log` has a `tool mcp__<broker server>__get_ids completed` or `tool mcp__<broker server>__generate_express completed` line for that turn | 3, the Expression Broker MCP server on the yui platform |
+| Nothing is listening on the port | 6 |
+| The gateway log never mentions `hermes_plugins.yui` | 2, then 3 |
+| An empty `turn` draws a `render` with no segments and no `turn_end` | 2, a second `plugin.yaml` named `yui` under `plugins/` |
+| The model name and working directory are read out | 5, `runtime_footer` |
+| The reasoning is read out as part of the reply | 5, `show_reasoning` |
+| The client connects, and a turn draws no reply | the client's own wait, `docs/reference/push-transport.md` |
+
+## Tests (optional, needs uv)
+
+```bash
+cd $YUI/integrations/hermes/platform/yui && uv sync && uv run pytest && uv run ruff check .
+```
+
+The tests stub the gateway modules, so they run without a gateway process.

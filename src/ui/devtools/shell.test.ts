@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createContextHistory } from "../../io/context-history";
-import { createEndpointsSettings } from "../../io/endpoints-settings";
+import { createContextHistory } from "../../io/chat/context-history";
+import { createEndpointsSettings } from "../../settings/backend/endpoints-settings";
 import { setLocale } from "../i18n";
 import { createDevtoolsShell } from "./shell";
 
@@ -93,5 +93,67 @@ describe("Developer Tools shell", () => {
     await Promise.resolve();
 
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("loads the motion-preview module only on its first activation", async () => {
+    const loadMotionPreview = vi.fn(async () => ({ dispose: vi.fn() }));
+    const shell = createDevtoolsShell({
+      mount: document.querySelector("#app")!,
+      history: createContextHistory(),
+      endpointsSettings: createEndpointsSettings(),
+      loadMotionPreview,
+    });
+
+    shell.activate("motion");
+    shell.activate("context");
+    shell.activate("motion");
+    await Promise.resolve();
+
+    expect(loadMotionPreview).toHaveBeenCalledOnce();
+    shell.dispose();
+  });
+
+  it("shows an error state when the motion-preview load rejects, not the loading placeholder", async () => {
+    const shell = createDevtoolsShell({
+      mount: document.querySelector("#app")!,
+      history: createContextHistory(),
+      endpointsSettings: createEndpointsSettings(),
+      loadMotionPreview: vi.fn(async () => {
+        throw new Error("registry load failed");
+      }),
+    });
+
+    shell.activate("motion");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const panel = document.querySelector<HTMLElement>('[data-panel="motion"]')!;
+    expect(panel.querySelector(".devtools-loading")).toBeNull();
+    expect(panel.querySelector(".devtools-error")).not.toBeNull();
+    shell.dispose();
+  });
+
+  it("retries the motion-preview load when the section is re-activated after a rejection", async () => {
+    const loadMotionPreview = vi
+      .fn<() => Promise<{ dispose(): void }>>()
+      .mockRejectedValueOnce(new Error("registry load failed"))
+      .mockResolvedValueOnce({ dispose: vi.fn() });
+    const shell = createDevtoolsShell({
+      mount: document.querySelector("#app")!,
+      history: createContextHistory(),
+      endpointsSettings: createEndpointsSettings(),
+      loadMotionPreview,
+    });
+
+    shell.activate("motion");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    shell.activate("context");
+    shell.activate("motion");
+    await Promise.resolve();
+
+    expect(loadMotionPreview).toHaveBeenCalledTimes(2);
+    shell.dispose();
   });
 });

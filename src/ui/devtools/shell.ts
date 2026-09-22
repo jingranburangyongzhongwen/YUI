@@ -1,10 +1,10 @@
-import type { createContextHistory } from "../../io/context-history";
-import type { createEndpointsSettings } from "../../io/endpoints-settings";
+import type { createContextHistory } from "../../io/chat/context-history";
+import type { createEndpointsSettings } from "../../settings/backend/endpoints-settings";
 import { t } from "../i18n";
 import { createAdvancedSettings } from "./advanced-settings";
 import { createContextInspector } from "./context-inspector";
 
-export type DevtoolsSection = "context" | "advanced" | "motion";
+type DevtoolsSection = "context" | "advanced" | "motion";
 
 interface DevtoolsShellOptions {
   mount: HTMLElement;

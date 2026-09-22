@@ -18,7 +18,7 @@
  */
 
 import type { EmotionRegistry, EndpointsConfig, MotionRegistry } from "../contract";
-import { resolveAssetUrl } from "../io/asset-url";
+import { resolveAssetUrl } from "./asset-url";
 import { validateAvatar } from "./validators/avatar";
 import { validateEmotionRegistry } from "./validators/emotion-registry";
 import { validateEndpoints } from "./validators/endpoints";
@@ -72,30 +72,12 @@ export interface TapConfig {
   pat_hold_ms: number;
 }
 
-export const TAP_DEFAULTS: TapConfig = {
-  spam_count: 4,
-  spam_window_ms: 3000,
-  region_radius_frac: 0.18,
-  region_motions: { head: "head_pat", chest: "embarrassed", hips: "embarrassed" },
-  bored_cue: { label: "bored poking" },
-  touch_cue_cooldown_ms: 60_000,
-  touch_emotion_hold_ms: 4_000,
-  pat_hold_ms: 300,
-};
-
 export interface PeekConfig {
   side_out_frac: number;
   side_in_frac: number;
   inset_frac: number;
   mirror_side: "left" | "right" | "none";
 }
-
-export const PEEK_DEFAULTS: PeekConfig = {
-  side_out_frac: 0.28,
-  side_in_frac: 0.23,
-  inset_frac: 0.12,
-  mirror_side: "right",
-};
 
 /** Ambient floor-stroll knobs. Distances and the floor tolerance are logical px. */
 export interface WalkConfig {
@@ -111,14 +93,6 @@ export interface WalkConfig {
   floor_tolerance_px: number;
 }
 
-export const WALK_DEFAULTS: WalkConfig = {
-  interval_min_ms: 30_000,
-  interval_max_ms: 60_000,
-  distance_min_px: 200,
-  distance_max_px: 600,
-  floor_tolerance_px: 24,
-};
-
 /** Ambient stroll knobs for a drag-origin window-top perch. */
 export interface PerchWalkConfig {
   dwell_min_ms: number;
@@ -129,15 +103,6 @@ export interface PerchWalkConfig {
   /** Height difference within which a neighbouring window top is one ledge with the host's. */
   level_tolerance_px: number;
 }
-
-export const PERCH_WALK_DEFAULTS: PerchWalkConfig = {
-  dwell_min_ms: 45_000,
-  dwell_max_ms: 120_000,
-  distance_min_px: 80,
-  distance_max_px: 400,
-  edge_margin_frac: 0.2,
-  level_tolerance_px: 8,
-};
 
 /** Fall dynamics and the surfaces a fall stops on. Distances and speeds are logical px. */
 export interface FallConfig {
@@ -155,23 +120,12 @@ export interface FallConfig {
   step_off_probability: number;
 }
 
-export const FALL_DEFAULTS: FallConfig = {
-  gravity_px_s2: 1600,
-  max_speed_px_s: 1200,
-  min_drop_frac: 0.2,
-  cue_cooldown_ms: 60_000,
-  land_room_frac: 0.5,
-  step_off_probability: 0.1,
-};
-
 export interface DescendConfig {
   /** Chance a stroll on a segment with a descent edge walks to that edge and descends. */
   chance: number;
   /** Chance the descent climbs down the lower screen's edge; otherwise she steps off and falls. */
   climb_down_chance: number;
 }
-
-export const DESCEND_DEFAULTS: DescendConfig = { chance: 0.5, climb_down_chance: 0.5 };
 
 /** Ambient window-climb knobs. Fractions are multiples of the on-screen character height. */
 export interface ClimbConfig {
@@ -201,19 +155,6 @@ export interface ClimbConfig {
   ledge_walk_max_frac: number;
 }
 
-export const CLIMB_DEFAULTS: ClimbConfig = {
-  interval_min_ms: 90_000,
-  interval_max_ms: 180_000,
-  perch_dwell_min_ms: 60_000,
-  perch_dwell_max_ms: 120_000,
-  max_height_frac: 4,
-  hang_frac: 0.3,
-  wall_offset_frac: 0.17,
-  descent_wall_offset_frac: 0.3,
-  ledge_walk_min_frac: 0.5,
-  ledge_walk_max_frac: 1.5,
-};
-
 /** Window-to-window jump knobs. Height fractions are multiples of the character height. */
 export interface JumpConfig {
   /** Chance a planned perch stroll becomes a jump when an eligible neighbour exists. */
@@ -237,17 +178,6 @@ export interface JumpConfig {
   flight_timeout_ms: number;
 }
 
-export const JUMP_DEFAULTS: JumpConfig = {
-  probability: 0.3,
-  height_up_max_frac: 0.5,
-  height_down_max_frac: 1,
-  gap_max_width_frac: 1.5,
-  apex_lift_frac: 0.15,
-  takeoff_frac: 0.4,
-  land_frac: 0.67,
-  flight_timeout_ms: 4000,
-};
-
 /** Authored label for one reflex-gesture speech candidate. context is optional user-authored intent. */
 export interface GestureCueConfig {
   label: string;
@@ -262,15 +192,47 @@ export interface GestureCuesConfig {
   dropped: GestureCueConfig;
 }
 
-export const GESTURE_CUES_DEFAULTS: GestureCuesConfig = {
-  drag_held: { label: "dragged around" },
-  window_sit: { label: "sat on window" },
-  peek: { label: "peeking" },
-  dropped: { label: "dropped from mid-air" },
-};
+/** Full-body fit-to-bounds camera knob. */
+export interface FramingConfig {
+  /** Padding around the model bounds, as a fraction of the fitted size. */
+  margin: number;
+  /** Vertical field of view (degrees) the fit solves against. */
+  fov: number;
+}
 
-/** Default drag-hold threshold (ms) before proactive.drag_held fires. */
-export const DRAG_HOLD_MS_DEFAULT = 5000;
+/** Click-through hit-test knob. */
+export interface HitTestKnobs {
+  /** How far outside the character the cursor may sit and still hold the window interactive. */
+  hysteresis_margin_px: number;
+  /** Gap between cursor reads while the window is click-through. */
+  poll_interval_ms: number;
+  /** Agreeing samples needed before the click-through state flips. */
+  debounce_samples: number;
+  /** Alpha (0, 1] a rendered pixel must reach to count as the character. */
+  alpha_threshold: number;
+}
+
+/** Cursor gaze-tracking angles (degrees) and damping. */
+export interface GazeKnobs {
+  /** No tracking within this eccentricity (degrees). */
+  deadDeg: number;
+  /** Eyes reach full tracking by here; head starts recruiting past it (degrees). */
+  headEngageDeg: number;
+  /** Beyond this the character disengages — can't crane the neck around (degrees). */
+  disengageDeg: number;
+  /** Degrees of gaze rotation per window-width of cursor offset from the head's screen position. */
+  sensitivity: number;
+  /** Max head-bone yaw (degrees). */
+  maxHeadYaw: number;
+  /** Max head-bone pitch (degrees). */
+  maxHeadPitch: number;
+  /** Max eye yaw/pitch (degrees). */
+  eyeMaxDeg: number;
+  /** Fraction of the head rotation taken by the head bone; the rest goes to neck. */
+  headNeckSplit: number;
+  /** Exponential damping rate (1/s) for k = 1-exp(-smooth·dt). */
+  smooth: number;
+}
 
 /** configs/avatar.json — VRM to load (renderer input). */
 export interface AvatarConfig {
@@ -278,47 +240,32 @@ export interface AvatarConfig {
   vrm_url: string;
   /** List of selectable VRMs. Absent → vrm_url is the single model. */
   available?: AvatarOption[];
-  /** Full-body fit-to-bounds camera knob. Absent → renderer default. */
-  framing?: { margin?: number; fov?: number };
-  /** Click-through hit-test knob. Absent → controller default. */
-  hit_test?: {
-    hysteresis_margin_px?: number;
-    poll_interval_ms?: number;
-    debounce_samples?: number;
-    /** alpha threshold for phase-2 (currently unused, only the (0,1] range is validated). */
-    alpha_threshold?: number;
-  };
-  /** Tap reaction knobs. Defaults are applied by the validator. */
+  /** Full-body fit-to-bounds camera knob. */
+  framing: FramingConfig;
+  /** Click-through hit-test knob. */
+  hit_test: HitTestKnobs;
+  /** Tap reaction knobs. */
   tap: TapConfig;
-  /** Side-peek geometry and mirroring knobs. Defaults are applied by the validator. */
+  /** Side-peek geometry and mirroring knobs. */
   peek: PeekConfig;
-  /** Ambient floor-stroll knobs. Defaults are applied by the validator. */
+  /** Ambient floor-stroll knobs. */
   walk: WalkConfig;
   /** Ambient stroll knobs for a drag-origin window-top perch. */
   perch_walk: PerchWalkConfig;
-  /** Drag-release fall knobs. Defaults are applied by the validator. */
+  /** Drag-release fall knobs. */
   fall: FallConfig;
-  /** Upper-to-lower monitor descent choices. Defaults are applied by the validator. */
+  /** Upper-to-lower monitor descent choices. */
   descend: DescendConfig;
-  /** Ambient window-climb knobs. Defaults are applied by the validator. */
+  /** Ambient window-climb knobs. */
   climb: ClimbConfig;
-  /** Window-to-window jump knobs. Defaults are applied by the validator. */
+  /** Window-to-window jump knobs. */
   jump: JumpConfig;
   /** Drag-hold reflex threshold (ms) — proactive.drag_held fires once a drag has been held this long. */
   drag_hold_ms: number;
-  /** Reflex-gesture speech cues (drag-hold / window-sit / peek / drop). Defaults are applied by the validator. */
+  /** Reflex-gesture speech cues (drag-hold / window-sit / peek / drop). */
   gesture_cues: GestureCuesConfig;
-  /** Cursor gaze-tracking knob. Absent → renderer default (natural preset). Partial values allowed. */
-  gaze?: {
-    deadDeg?: number;
-    headEngageDeg?: number;
-    disengageDeg?: number;
-    maxHeadYaw?: number;
-    maxHeadPitch?: number;
-    eyeMaxDeg?: number;
-    headNeckSplit?: number;
-    smooth?: number;
-  };
+  /** Cursor gaze-tracking knob. */
+  gaze: GazeKnobs;
 }
 
 /** Attach-time caps on one turn's image attachments. */
@@ -329,19 +276,11 @@ export interface AttachmentLimits {
   max_image_bytes: number;
 }
 
-/** Applied by the validator for any attachments key guardrails.json omits. */
-export const ATTACHMENT_LIMITS_DEFAULTS: AttachmentLimits = {
-  max_count: 6,
-  max_image_bytes: 5 * 1024 * 1024,
-};
-
 /** configs/guardrails.json — debounce/rate-limit values. */
 export interface GuardrailsConfig {
   /** per-source debounce window (ms). 0 = no debounce. */
   debounce_ms: {
-    idle_watcher: number;
     os_event_watcher: number;
-    backend_push_source: number;
     user_input_source: number;
     screen_watcher: number;
   };
@@ -362,7 +301,7 @@ export interface GuardrailsConfig {
   attachments: AttachmentLimits;
 }
 
-/** TTFT filler language — closed union, never crosses the Hermes wire. */
+/** TTFT filler language — closed union, never crosses the backend wire. */
 export type FillerLang = "ja" | "en" | "ko";
 
 /** Per-language filler phrase pool, one list per waiting tier. */
@@ -460,12 +399,12 @@ export const CONFIG_FILES: Record<ConfigSection, string> = {
  * The async signature is there to accommodate keychain access (IPC) up front.
  */
 export interface SecretProvider {
-  /** undefined when absent. Never throws (a missing key is normal — local Hermes is unauthenticated). */
+  /** undefined when absent. Never throws (a missing key is normal — a local backend may be unauthenticated). */
   get(key: string): Promise<string | undefined>;
 }
 
 /**
- * Name used to look up the Hermes chat key in the SecretProvider. Corresponds to backend env `API_SERVER_KEY`.
+ * Name used to look up the chat backend key in the SecretProvider (adapter specifics: `integrations/hermes/README.md`).
  * Call site (dispatcher): `streamChat(ep, req, { apiKey: await secrets.get(CHAT_API_KEY_SECRET) })`.
  * (Kept here rather than in chat-client — the secret name is config/SecretProvider's concern, unrelated to the openai SDK.)
  */
@@ -512,12 +451,22 @@ export interface LoadConfigOptions {
 }
 
 /** Default fetch-based reader (browser/Tauri webview runtime). */
-function fetchReader(
-  baseUrl: string,
-  cacheBust?: string,
-  resolveUrl: AssetUrlResolver = resolveAssetUrl,
-  fetchImpl: typeof fetch = globalThis.fetch,
-): ConfigReader {
+export function fetchReader(opts: {
+  /** Prefix prepended to every read path. */
+  baseUrl: string;
+  /** Cache-busting query (passed by the store on hot-reload refetch). */
+  cacheBust?: string;
+  /** Logical path → runtime URL resolver. Defaults to resolveAssetUrl. */
+  resolveUrl?: AssetUrlResolver;
+  /** fetch injection (tests). Defaults to globalThis.fetch. */
+  fetch?: typeof fetch;
+}): ConfigReader {
+  const {
+    baseUrl,
+    cacheBust,
+    resolveUrl = resolveAssetUrl,
+    fetch: fetchImpl = globalThis.fetch,
+  } = opts;
   return async (file) => {
     const q = cacheBust ? `?t=${encodeURIComponent(cacheBust)}` : "";
     const url = await resolveUrl(`${baseUrl}/${file}${q}`);
@@ -528,7 +477,7 @@ function fetchReader(
     try {
       return await res.json();
     } catch {
-      throw new ConfigError(file, ["응답이 JSON이 아님"]);
+      throw new ConfigError(file, ["response is not JSON"]);
     }
   };
 }
@@ -544,7 +493,12 @@ function fetchReader(
 export async function loadConfig(opts: LoadConfigOptions = {}): Promise<AppConfig> {
   const read =
     opts.read ??
-    fetchReader(opts.baseUrl ?? "/configs", opts.cacheBust, opts.resolveUrl, opts.fetch);
+    fetchReader({
+      baseUrl: opts.baseUrl ?? "/configs",
+      cacheBust: opts.cacheBust,
+      resolveUrl: opts.resolveUrl,
+      fetch: opts.fetch,
+    });
 
   // Per-file reads run in parallel; validation runs in deterministic order.
   const [

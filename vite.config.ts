@@ -7,7 +7,7 @@ import { resolveVitePort } from "./scripts/dev-port.mjs";
 
 // Dev static serving: /vrms/* → resources/vrms/, /configs/* → configs/.
 // Exposes VRM assets (resources/vrms, gitignored) and runtime config at clean URLs without a publicDir.
-// prod (Tauri) serves via bundle.resources + the asset protocol — src/io/asset-url.ts resolves the same logical paths.
+// prod (Tauri) serves via bundle.resources + the asset protocol — src/config/asset-url.ts resolves the same logical paths.
 const MIME: Record<string, string> = {
   ".vrm": "application/octet-stream",
   ".vrma": "application/octet-stream",
@@ -110,14 +110,18 @@ export default defineConfig(() => ({
     port: resolveVitePort(),
     strictPort: true,
     host: "127.0.0.1",
-    // Same-origin /__hermes → proxy to Hermes (avoids web chat CORS preflight, SSE streaming).
+    watch: {
+      // Rust rebuilds replace locked DLLs under this directory on Windows.
+      ignored: ["**/src-tauri/target/**"],
+    },
+    // Same-origin /__hermes → dev proxy to the Responses backend (avoids web chat CORS preflight, SSE streaming).
     // :8643 stays in sync with chat_base_url in configs/endpoints.json.
     proxy: {
       "/__hermes": {
         target: "http://localhost:8643",
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/__hermes/, ""),
-        // Hermes allowlist-checks the Origin → worktree dev ports other than 1420 get 403.
+        // A backend may allowlist-check the Origin → worktree dev ports other than 1420 get 403.
         // changeOrigin only changes Host, so overwrite Origin with an allowed value to let any port through.
         configure: (proxy) => {
           const origin = process.env.YUI_HERMES_ORIGIN ?? "http://localhost:1420";

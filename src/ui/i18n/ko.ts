@@ -17,8 +17,6 @@ const ko: Record<string, string> = {
   // voice state labels
   "voice.state.idle": "대기 중",
   "voice.state.listening": "듣는 중…",
-  "voice.state.processing": "처리 중…",
-  "voice.state.speaking": "말하는 중…",
   "voice.state.asr": "ASR 전송",
   "voice.state.fired": "전달됨",
   "voice.state.error": "오류",
@@ -51,6 +49,11 @@ const ko: Record<string, string> = {
   "input.error_open_advanced": "고급 열기",
   "input.attach_too_many": "이미지가 너무 많음 · 한 턴에 {max}장까지",
   "input.attach_too_large": "이미지가 너무 큼 · 장당 {max}MB까지",
+  "input.attach_not_ready": "아직 첨부할 수 없음 · 상한을 불러오는 중",
+
+  // message window name plate
+  "plate.thinking": "생각 중",
+  "plate.responding": "응답 중",
 
   // chain-break (404) recovery notice
   "chain.reset_notice": "대화 컨텍스트가 초기화되었습니다",
@@ -92,9 +95,11 @@ const ko: Record<string, string> = {
   "panel.tablist_label": "설정 영역",
   "panel.drag_hint": "드래그해서 옮기기",
   "panel.pop_out": "창으로 빼기",
+  "panel.message": "메시지 입력",
   "panel.close": "닫기",
   "panel.rail_collapse": "섹션 목록 접기",
   "panel.rail_expand": "섹션 목록 펼치기",
+  "settings.title": "YUI 설정",
   "devtools.label": "개발자 도구",
   "devtools.sub": "전송 컨텍스트와 모션 미리보기",
   "devtools.open": "열기",
@@ -297,11 +302,12 @@ const ko: Record<string, string> = {
 
   // history tab
   "history.current": "현재 대화",
-  "history.turns": "{n}턴",
+  "history.messages": "메시지 {n}개",
+  "history.messages_one": "메시지 1개",
   "history.who_user": "나",
   "history.who_yui": "유이",
   "history.empty": "아직 나눈 대화가 없어요",
-  "history.foot": "최근 200턴 · 이 기기에만 저장",
+  "history.foot": "최근 메시지 200개 · 이 기기에만 저장",
 
   // TTS output toggle
   "tts_output.label": "음성 출력",
@@ -335,6 +341,14 @@ const ko: Record<string, string> = {
   "svc.chat_aria": "채팅 API 종류",
   "svc.chat_type_responses": "Responses API",
   "svc.chat_type_completions": "Chat Completions",
+  "svc.chat_type_push": "Push · 연결 유지",
+  "svc.chat_status_connected": "연결됨 · {id}",
+  "svc.chat_status_connecting": "연결하는 중…",
+  "svc.chat_status_reconnecting": "{seconds}초 뒤 다시 연결",
+  "svc.chat_status_refused": "백엔드가 키를 거부했습니다",
+  "svc.chat_status_reconnect": "다시 연결",
+  "svc.chat_status_connect_now": "지금 연결",
+  "svc.chat_status_offline": "연결 안 됨",
   "svc.chat_preset_label": "제공자",
   "svc.chat_preset_aria": "채팅 제공자 프리셋",
   "svc.chat_preset_custom": "직접 입력",
@@ -478,6 +492,23 @@ const ko: Record<string, string> = {
   "session.confirm_q": "새로 시작할까요?",
   "session.confirm_go": "새로 시작",
   "session.confirm_cancel": "취소",
+
+  // delegations
+  "deleg.chip_running": "작업 {n}개 진행 중",
+  "deleg.chip_running_one": "작업 1개 진행 중",
+  "deleg.chip_lost": "연결 끊김",
+  "deleg.list_title": "위임한 작업",
+  "deleg.min": "{n}분",
+  "deleg.hour_min": "{h}시간 {m}분",
+  "deleg.done": "끝남",
+  "deleg.done_ago": "끝남 · {time} 전",
+  "deleg.failed": "실패",
+  "deleg.failed_ago": "실패 · {time} 전",
+  "deleg.took": "걸린 시간 {time}",
+
+  // reasoning
+  "think.chip": "추론",
+  "aria.think_toggle": "추론 내용 보기·숨기기",
 };
 
 export default ko;
