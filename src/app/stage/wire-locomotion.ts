@@ -7,7 +7,7 @@ import {
 } from "../../ambient/locomotion/climber";
 import { FALL_MOTION_ID, LAND_MOTION_ID } from "../../ambient/locomotion/faller";
 import { createSitter, type Sitter } from "../../ambient/locomotion/sitter";
-import { onFloor } from "../../ambient/locomotion/walker";
+import { onFloor, WALK_MOTION_ID } from "../../ambient/locomotion/walker";
 import {
   wireClimber,
   wireFaller,
@@ -80,6 +80,8 @@ export function wireLocomotion(deps: {
   onStrollEnd: (bodyReleased: boolean) => void;
   register: (teardown: () => void) => void;
   log: Logger;
+  /** She became a paper strip, or stood back up. */
+  onFlat?: (flat: boolean) => void;
 }): {
   walker: { isStrolling(): boolean };
   sitter: Sitter;
@@ -323,17 +325,28 @@ export function wireLocomotion(deps: {
       return id === undefined || !yieldBlocked.has(id);
     },
     measure: measureYield,
-    walkTo: (toX) => walker.walkTo(toX),
-    moveTo: async (toX) => {
+    walkTo: (toX, opts) => walker.walkTo(toX, undefined, false, opts),
+    readPose: async () => {
       const win = travelFrame.getWindow();
       const [pos, sf] = await Promise.all([win.outerPosition(), win.scaleFactor()]);
       const scale = sf > 0 ? sf : 1;
-      await win.setPositionLogical(Math.round(toX), Math.round(pos.y / scale));
+      return { x: pos.x / scale, y: pos.y / scale };
     },
+    moveTo: async (x, y) => {
+      const win = travelFrame.getWindow();
+      await win.setPositionLogical(Math.round(x), Math.round(y));
+    },
+    playWalk: () => {
+      renderer.playMotion({ id: WALK_MOTION_ID });
+    },
+    onFrame: (fn) => renderer.onTick((ctx) => fn(ctx.dt)),
     setFlat(scaleX) {
-      stringFlat = scaleX !== null;
+      const flat = scaleX !== null;
+      stringFlat = flat;
       renderer.setStringFlat(scaleX);
+      deps.onFlat?.(flat);
     },
+    holdEdge: (held) => windowSourcesRef?.setKeepOnScreenPaused(held),
     schedule(ms, fn) {
       const id = setInterval(fn, ms);
       return () => clearInterval(id);

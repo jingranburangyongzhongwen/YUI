@@ -101,6 +101,14 @@ pub(crate) fn paths_include_dance(paths: &[String]) -> bool {
     })
 }
 
+/// Dance files and held-card images. Explorer shows a deny cursor when this is false.
+pub(crate) fn paths_accept_file_drop(paths: &[String]) -> bool {
+    paths_include_dance(paths)
+        || paths.iter().any(|path| {
+            crate::image_drop::image_mime(std::path::Path::new(path)).is_some()
+        })
+}
+
 /// Explorer / desktop classes a file-drag can start from (window or ancestor).
 pub(crate) fn is_shell_window_class(class: &str) -> bool {
     matches!(
@@ -205,7 +213,7 @@ pub(crate) fn next_hold_remaining_ms(
 
 #[cfg(target_os = "windows")]
 mod drop_target {
-    use super::{file_drop_payload, paths_include_dance, FileDropPayload, FILE_DROP_CHANNEL};
+    use super::{file_drop_payload, paths_accept_file_drop, FileDropPayload, FILE_DROP_CHANNEL};
     use std::cell::{Cell, RefCell};
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -356,7 +364,7 @@ mod drop_target {
             let paths = FileDropTarget::paths_from_data(obj);
             let valid = match &paths {
                 Some(p) if p.is_empty() => FileDropTarget::query_hdrop(obj),
-                Some(p) => paths_include_dance(p),
+                Some(p) => paths_accept_file_drop(p),
                 None => FileDropTarget::query_hdrop(obj),
             };
             self.enter_is_valid.set(valid);
@@ -819,7 +827,8 @@ mod tests {
     use super::{
         cursor_in_inflated_rect, cursor_in_rect, drag_active, drag_threshold_passed,
         file_drop_payload, image_name_is_explorer, is_file_drag_end, is_file_drag_pasteboard_type,
-        is_file_drag_start, is_shell_window_class, next_hold_remaining_ms, paths_include_dance,
+        is_file_drag_start, is_shell_window_class, next_hold_remaining_ms, paths_accept_file_drop,
+        paths_include_dance,
         shell_file_drag, FILE_DRAG_ARM_MARGIN_PX, FILE_DRAG_HOLD_MS, FILE_DROP_CHANNEL,
     };
 
@@ -892,6 +901,19 @@ mod tests {
         assert!(!paths_include_dance(&["/tmp/clip.webm".into()]));
         assert!(!paths_include_dance(&["/tmp/clip.vrma".into()]));
         assert!(!paths_include_dance(&[]));
+        assert!(!paths_include_dance(&[r"C:\shots\Card.PNG".into()]));
+    }
+
+    #[test]
+    fn paths_accept_file_drop_includes_held_images() {
+        assert!(paths_accept_file_drop(&[r"C:\shots\Card.PNG".into()]));
+        assert!(paths_accept_file_drop(&["/tmp/a.jpg".into()]));
+        assert!(paths_accept_file_drop(&["/tmp/a.jpeg".into()]));
+        assert!(paths_accept_file_drop(&["/tmp/a.webp".into()]));
+        assert!(paths_accept_file_drop(&["/tmp/a.gif".into()]));
+        assert!(paths_accept_file_drop(&["/tmp/note.txt".into(), "/tmp/a.pkl".into()]));
+        assert!(!paths_accept_file_drop(&["/tmp/a.txt".into()]));
+        assert!(!paths_accept_file_drop(&[]));
     }
 
     #[test]

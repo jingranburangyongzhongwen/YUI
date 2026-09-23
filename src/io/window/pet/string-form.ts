@@ -1,8 +1,10 @@
 /**
- * string-form — "让一下": walk to the nearer screen edge, or flatten there.
+ * string-form — "让一下": walk to the nearer screen edge.
  *
- * The phrase match and the edge choice are body commands. What she says about
- * the request stays on the chat turn the input already sent.
+ * She walks to the nearer screen edge. A gap that fits her stays standing.
+ * A gap that does not is flattened for the last stretch, which moves on its
+ * own so the paper form is seen walking. The phrase match is a body command.
+ * What she says stays on the chat turn the input already sent.
  */
 
 export interface EdgeSpan {
@@ -21,7 +23,14 @@ export type YieldSide = "left" | "right";
 
 export type YieldAction =
   | { kind: "walk"; side: YieldSide; toX: number }
-  | { kind: "flatten"; side: YieldSide; toX: number };
+  | {
+      kind: "walk-then-flatten";
+      side: YieldSide;
+      /** Window origin where a standing body meets the narrow gap. */
+      standToX: number;
+      /** Window origin with her center on the screen edge. */
+      flatToX: number;
+    };
 
 export interface YieldMeasure {
   /** Character center, logical px. */
@@ -74,31 +83,41 @@ export function blockingWindow<T extends ScreenRectLite>(
   );
 }
 
+function originFor(bodyX: number, anchorX: number): number {
+  return Math.round(bodyX - anchorX);
+}
+
 /**
- * Walk when the nearer gap fits a standing body; otherwise park her center on
- * that screen edge so a flattened body can sit in the gap. `toX` is the pet
- * window's logical origin.
+ * A gap that fits a body is walked standing, and she stops there in 3D.
+ * A narrower gap is walked standing until `flattenLeadPx` remains, then that
+ * last stretch is a paper slide. Origins are the pet window's logical x.
  */
 export function planYield(input: {
   bodyX: number;
   bodyWidth: number;
   anchorX: number;
+  /** How far before the screen edge the body flattens, logical px. */
+  flattenLeadPx: number;
   monitor: EdgeSpan;
   window: EdgeSpan | null;
 }): YieldAction {
   const side = nearerSide(input.bodyX, input.monitor);
   const gap = edgeGap(side, input.monitor, input.window);
   const edgeX = side === "left" ? input.monitor.x : input.monitor.x + input.monitor.width;
-  const targetBodyX =
-    gap >= input.bodyWidth
-      ? side === "left"
-        ? input.monitor.x + input.bodyWidth / 2
-        : input.monitor.x + input.monitor.width - input.bodyWidth / 2
-      : edgeX;
+  const standAtEdge =
+    side === "left"
+      ? input.monitor.x + input.bodyWidth / 2
+      : input.monitor.x + input.monitor.width - input.bodyWidth / 2;
+  if (gap >= input.bodyWidth) {
+    return { kind: "walk", side, toX: originFor(standAtEdge, input.anchorX) };
+  }
+  const standBody = side === "left" ? edgeX + input.flattenLeadPx : edgeX - input.flattenLeadPx;
+  const beforeLead = side === "left" ? input.bodyX > standBody : input.bodyX < standBody;
   return {
-    kind: gap >= input.bodyWidth ? "walk" : "flatten",
+    kind: "walk-then-flatten",
     side,
-    toX: Math.round(targetBodyX - input.anchorX),
+    standToX: originFor(beforeLead ? standBody : input.bodyX, input.anchorX),
+    flatToX: originFor(edgeX, input.anchorX),
   };
 }
 
@@ -106,6 +125,8 @@ export interface StringFormConfig {
   phrase: string;
   body_width_px: number;
   scale_x: number;
+  /** Last stretch walked as paper, logical px. */
+  flatten_lead_px: number;
   poll_ms: number;
 }
 
@@ -120,9 +141,16 @@ export function createStringForm(deps: {
   getConfig: () => StringFormConfig;
   canYield: () => boolean;
   measure: () => Promise<YieldMeasure | null>;
-  walkTo: (toX: number) => Promise<"arrived" | "lost">;
-  moveTo: (toX: number) => Promise<void>;
+  walkTo: (toX: number, opts?: { clamp?: boolean }) => Promise<"arrived" | "lost">;
+  /** Window origin in logical px. */
+  readPose: () => Promise<{ x: number; y: number }>;
+  moveTo: (x: number, y: number) => Promise<void>;
+  /** Keep the walk clip playing under the paper slide. */
+  playWalk: () => void;
+  onFrame: (fn: (dt: number) => void) => () => void;
   setFlat: (scaleX: number | null) => void;
+  /** Keep the off-screen guard from pulling a paper body back onto the monitor. */
+  holdEdge?: (held: boolean) => void;
   schedule: (ms: number, fn: () => void) => () => void;
 }): StringForm {
   let generation = 0;
@@ -135,6 +163,7 @@ export function createStringForm(deps: {
     if (flatSide === null) return;
     flatSide = null;
     deps.setFlat(null);
+    deps.holdEdge?.(false);
   }
 
   function armPoll(): void {
@@ -172,24 +201,76 @@ export function createStringForm(deps: {
       bodyX: measured.bodyX,
       anchorX: measured.anchorX,
       bodyWidth: measured.bodyWidth ?? cfg.body_width_px,
+      flattenLeadPx: cfg.flatten_lead_px,
       monitor: measured.monitor,
       window: measured.window,
     });
     if (gen !== generation) return;
-    try {
-      if (action.kind === "walk") {
-        clearFlat();
+    if (action.kind === "walk") {
+      clearFlat();
+      try {
         await deps.walkTo(action.toX);
+      } catch {
         return;
       }
-      await deps.moveTo(action.toX);
-    } catch {
       return;
     }
-    if (gen !== generation) return;
+    clearFlat();
+    const originX = measured.bodyX - measured.anchorX;
+    if (Math.round(originX) !== action.standToX) {
+      let stood: "arrived" | "lost";
+      try {
+        stood = await deps.walkTo(action.standToX);
+      } catch {
+        return;
+      }
+      if (gen !== generation || stood === "lost") return;
+    }
     flatSide = action.side;
     deps.setFlat(cfg.scale_x);
+    deps.holdEdge?.(true);
+    deps.playWalk();
+    const outcome = await slideToEdge(gen, action.flatToX);
+    if (gen !== generation || outcome === "lost") {
+      clearFlat();
+      return;
+    }
     armPoll();
+  }
+
+  /** Paper travel. Independent of the floor walk, which stops at the monitor edge. */
+  async function slideToEdge(gen: number, toX: number): Promise<"arrived" | "lost"> {
+    const speed = 180;
+    let pose: { x: number; y: number };
+    try {
+      pose = await deps.readPose();
+    } catch {
+      return "lost";
+    }
+    if (gen !== generation) return "lost";
+    let x = pose.x;
+    const y = pose.y;
+    if (x === toX) return "arrived";
+    return new Promise((resolve) => {
+      const stop = deps.onFrame((dt) => {
+        if (gen !== generation) {
+          stop();
+          resolve("lost");
+          return;
+        }
+        const step = speed * Math.min(Math.max(dt, 0), 0.05);
+        const remain = toX - x;
+        x = Math.abs(remain) <= step ? toX : x + Math.sign(remain) * step;
+        void deps.moveTo(x, y).catch(() => {
+          stop();
+          resolve("lost");
+        });
+        if (x === toX) {
+          stop();
+          resolve("arrived");
+        }
+      });
+    });
   }
 
   return {

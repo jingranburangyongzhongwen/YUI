@@ -35,7 +35,13 @@ import type { Logger, LogLevel } from "../logger";
 import { createLogger } from "../logger";
 import type { Renderer } from "../renderer";
 import type { BackendCaller, TurnFailure, TurnOutcome } from "./backend/backend-caller";
-import { classify, PACED_SOURCES, type UserTurnSource, userTurnSourceOf } from "./core/classify";
+import {
+  classify,
+  PACED_SOURCES,
+  selfStartWhileTucked,
+  type UserTurnSource,
+  userTurnSourceOf,
+} from "./core/classify";
 import type { BusEnvelope, EventBus } from "./core/event-bus";
 import type { Guardrails } from "./core/guardrails";
 import type { ProactivePacer } from "./core/proactive-pacer";
@@ -72,6 +78,8 @@ interface DispatcherDeps {
    * loop cues, schedule and the buffered inboxes this is the only gate.
    */
   pacer?: Pick<ProactivePacer, "isHolding" | "noteTurnStart">;
+  /** While she is a paper strip at the screen edge, self-started turns are not fired. */
+  tucked?: () => boolean;
   /** Skip-record JSONL sink — best-effort disk log of the fires the pacer held back. */
   appendSkipRecord?: (record: PacerSkipRecord) => void;
   /** pump interval (ms). default 16 (roughly rAF). Tests advance with a fake timer. */
@@ -102,7 +110,7 @@ type DispatcherState = "booting" | "running" | "cooldown" | "degraded" | "stoppe
 interface DropRecord {
   seq_id?: number;
   event_name: string;
-  reason: TurnFailure | "guardrail_drop" | "stale_pending" | "degraded_drop" | "global_gap";
+  reason: TurnFailure | "guardrail_drop" | "stale_pending" | "degraded_drop" | "global_gap" | "tucked";
   ts: number;
 }
 
@@ -118,6 +126,7 @@ export const DROP_SEVERITY: Record<DropRecord["reason"], LogLevel> = {
   stale_pending: "info",
   degraded_drop: "warn",
   global_gap: "info",
+  tucked: "info",
 };
 
 /** in_flight_backend_call. */
@@ -440,6 +449,10 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       }
       // Ahead of the guardrail: evaluate() spends a rate-limit slot at fire time and never
       // refunds it, so a held fire must not reach it.
+      if (selfStartWhileTucked(deps.tucked?.() === true, env)) {
+        recordDrop(env, "tucked");
+        return;
+      }
       if (heldByPacer(env)) {
         dropForPacer(env);
         return;

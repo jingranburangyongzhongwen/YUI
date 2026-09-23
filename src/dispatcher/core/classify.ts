@@ -62,6 +62,11 @@ export function classify(env: BusEnvelope): Classification {
  * Other triggers such as proactive/schedule/agent are undefined (§274, not a UI error-surface target). */
 export type UserTurnSource = "text" | "voice";
 
+/** A tucked paper body drops every self-started turn. Typed and spoken turns still pass. */
+export function selfStartWhileTucked(tucked: boolean, env: BusEnvelope): boolean {
+  return tucked && userTurnSourceOf(env) === undefined;
+}
+
 export function userTurnSourceOf(env: BusEnvelope): UserTurnSource | undefined {
   if (env.event_name === "user.text_submitted") return "text";
   if (env.event_name === "user.voice_segment_ready") return "voice";

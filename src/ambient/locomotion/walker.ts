@@ -217,7 +217,12 @@ export interface Walker {
    * start cue back until the clip is actually running. `holdClip` leaves the walk clip
    * playing on arrival for the caller's next clip to crossfade out of.
    */
-  walkTo(toX: number, onAccepted?: () => void, holdClip?: boolean): Promise<"arrived" | "lost">;
+  walkTo(
+    toX: number,
+    onAccepted?: () => void,
+    holdClip?: boolean,
+    opts?: { clamp?: boolean },
+  ): Promise<"arrived" | "lost">;
   /** End a running stroll now and rearm the interval. */
   cancel(): void;
   /** An ambient stroll is moving the window — a directed walk belongs to its caller. */
@@ -404,6 +409,7 @@ export function createWalker(deps: WalkerDeps): Walker {
     toX: number,
     onAccepted: (() => void) | undefined,
     holdClip: boolean,
+    clamp: boolean,
   ): Promise<"arrived" | "lost" | "running"> {
     const startedAt = generation;
     const cfg = deps.getConfig();
@@ -428,6 +434,7 @@ export function createWalker(deps: WalkerDeps): Walker {
     let target = toX;
     const monitor = monitorAt(monitors, pos.x, pos.y);
     if (
+      clamp &&
       monitor &&
       feet &&
       deps.travel.current() === null &&
@@ -524,12 +531,12 @@ export function createWalker(deps: WalkerDeps): Walker {
       doc?.addEventListener("visibilitychange", onVisibilityChange);
       unsub = renderer.onTick(tick);
     },
-    async walkTo(toX, onAccepted, holdClip = false) {
+    async walkTo(toX, onAccepted, holdClip = false, opts) {
       endStroll();
       starting = true;
       let outcome: "arrived" | "lost" | "running";
       try {
-        outcome = await beginWalkTo(toX, onAccepted, holdClip);
+        outcome = await beginWalkTo(toX, onAccepted, holdClip, opts?.clamp !== false);
       } finally {
         starting = false;
       }

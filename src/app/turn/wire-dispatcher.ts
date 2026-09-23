@@ -75,6 +75,8 @@ export function wireDispatcher(deps: {
   openQuickControls: (tab: QuickControlsTab) => void;
   showVoiceError: (reason: string) => void;
   appendTurnRecord: (record: TurnRecord | PacerSkipRecord) => void;
+  /** Paper strip at the screen edge — self-started speech stays quiet. */
+  tucked?: () => boolean;
   t: (key: string, vars?: Record<string, string | number>) => string;
   register: (teardown: () => void) => void;
 }): {
@@ -191,6 +193,7 @@ export function wireDispatcher(deps: {
     turnLog,
     hasOutstandingSpeech: () => voice.turnOutput.hasOutstandingSpeech(),
     pacer,
+    tucked: deps.tucked,
     appendSkipRecord: appendTurnRecord,
     onTurnFailed: previousTurn.callFailed,
     onUserTurnFailed: (reason, source) => {

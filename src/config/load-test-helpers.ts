@@ -95,6 +95,7 @@ export function avatarFixture(): AvatarConfig {
       phrase: "让一下",
       body_width_px: 180,
       scale_x: 0.12,
+      flatten_lead_px: 240,
       poll_ms: 700,
     },
     drag_hold_ms: 5000,

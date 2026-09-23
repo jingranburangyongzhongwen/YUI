@@ -149,7 +149,12 @@ export function wireWalker(deps: {
   onDescend: (edge: DescentEdge) => void;
   log: Logger;
 }): {
-  walkTo(toX: number, onAccepted?: () => void, holdClip?: boolean): Promise<"arrived" | "lost">;
+  walkTo(
+    toX: number,
+    onAccepted?: () => void,
+    holdClip?: boolean,
+    opts?: { clamp?: boolean },
+  ): Promise<"arrived" | "lost">;
   cancel(): void;
   isStrolling(): boolean;
   isWalkingTo(): boolean;
@@ -163,7 +168,9 @@ export function wireWalker(deps: {
       toX: number,
       onAccepted?: () => void,
       holdClip?: boolean,
-    ): Promise<"arrived" | "lost"> => (await walker?.walkTo(toX, onAccepted, holdClip)) ?? "lost",
+      opts?: { clamp?: boolean },
+    ): Promise<"arrived" | "lost"> =>
+      (await walker?.walkTo(toX, onAccepted, holdClip, opts)) ?? "lost",
     cancel: () => walker?.cancel(),
     isStrolling: () => walker?.isStrolling() ?? false,
     isWalkingTo: () => walker?.isWalkingTo() ?? false,

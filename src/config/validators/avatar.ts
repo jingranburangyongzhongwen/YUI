@@ -598,7 +598,7 @@ export function validateAvatar(file: string, raw: unknown): AvatarConfig {
     rejectUnknownKeys(
       issues,
       rawStringForm,
-      ["phrase", "body_width_px", "scale_x", "poll_ms"],
+      ["phrase", "body_width_px", "scale_x", "flatten_lead_px", "poll_ms"],
       "string_form",
     );
     string_form.phrase = str(rawStringForm, "string_form", "phrase");
@@ -606,6 +606,13 @@ export function validateAvatar(file: string, raw: unknown): AvatarConfig {
       rawStringForm,
       "string_form",
       "body_width_px",
+      (v) => v > 0,
+      "a finite number > 0",
+    );
+    string_form.flatten_lead_px = num(
+      rawStringForm,
+      "string_form",
+      "flatten_lead_px",
       (v) => v > 0,
       "a finite number > 0",
     );

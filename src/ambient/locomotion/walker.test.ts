@@ -1180,6 +1180,21 @@ describe("createWalker — walkTo", () => {
       expect(h.travelBeginCalls).toEqual([]);
     });
 
+    it("walks past the floor segment when clamp is off", async () => {
+      const h = makeHarness({
+        position: { x: -600, y: -447 },
+        feetY: 447,
+        monitors: [BUILTIN, UPPER_LEFT],
+      });
+      h.walker.start();
+
+      expect(await settle(h, h.walker.walkTo(-200, undefined, false, { clamp: false }))).toBe(
+        "arrived",
+      );
+
+      expect(h.positions.at(-1)).toEqual({ x: -200, y: -447 });
+    });
+
     it("does not clamp a walkTo while a travel is current", async () => {
       const h = makeHarness({
         position: { x: -600, y: -447 },

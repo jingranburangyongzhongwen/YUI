@@ -193,6 +193,8 @@ const realFactories: ConfiguredBootstrapFactories = {
     const unlistenFrontmost = await subscribeOsEvent({ onTick: frontmostTracker.onTick, log });
     if (unlistenFrontmost) register(unlistenFrontmost);
 
+    let tucked = false;
+    let hush = (): void => {};
     const turnWiring = wireDispatcher({
       bus,
       renderer,
@@ -222,6 +224,7 @@ const realFactories: ConfiguredBootstrapFactories = {
       openQuickControls: (tab) => getQuickControls().open(undefined, { tab }),
       showVoiceError: voiceErrorDwell.show,
       appendTurnRecord: (record) => appendRecord(record),
+      tucked: () => tucked,
       t,
       register,
     });
@@ -345,6 +348,10 @@ const realFactories: ConfiguredBootstrapFactories = {
       },
       register,
       log,
+      onFlat: (flat) => {
+        tucked = flat;
+        if (flat) hush();
+      },
     });
     turnVoice.setStrolling(locomotion.walker);
 
@@ -411,6 +418,9 @@ const realFactories: ConfiguredBootstrapFactories = {
       const cut = pushTurns.cut();
       voice.speechPlayback.interrupt();
       return cut;
+    };
+    hush = () => {
+      stopTurn();
     };
     wireStopButton({ onStop: (cb) => surfaces.onStop(cb), stopTurn, socket: pushSocket, log });
     surfaces.onSubmit((text, images) => {

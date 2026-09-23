@@ -220,6 +220,8 @@ export interface StringFormConfig {
   body_width_px: number;
   /** Horizontal scale while flattened. */
   scale_x: number;
+  /** Last stretch walked as paper, logical px, so the flatten is visible. */
+  flatten_lead_px: number;
   /** How often a flattened body rechecks whether the gap can hold her again. */
   poll_ms: number;
 }
