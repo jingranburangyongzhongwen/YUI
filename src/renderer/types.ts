@@ -150,6 +150,11 @@ export interface Renderer {
    */
   getCharacterWidthPx(): number | null;
   /**
+   * Flatten the body on X (`scaleX` in (0, 1)), or restore it when null.
+   * Reapplied when the next VRM loads.
+   */
+  setStringFlat(scaleX: number | null): void;
+  /**
    * Per-pixel alpha hit test: true when the rendered character pixel under the
    * window-local client CSS-px point (x, y) — e.g. MouseEvent.clientX/clientY — is
    * opaque (alpha ≥ threshold) — the true silhouette, including hair/transparent-

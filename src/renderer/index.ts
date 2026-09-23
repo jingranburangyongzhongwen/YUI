@@ -121,6 +121,14 @@ export function createRenderer(options: RendererOptions): Renderer {
   loader.register((parser) => new VRMLoaderPlugin(parser));
   loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
   let currentVrm: VRM | undefined;
+  /** Horizontal scale while she is a paper strip. Null keeps the rest pose. */
+  let stringScaleX: number | null = null;
+
+  function applyStringScale(): void {
+    if (!currentVrm) return;
+    const x = stringScaleX ?? 1;
+    currentVrm.scene.scale.set(x, 1, 1);
+  }
 
   // ── Motion playback state ──────────────────────────────────────────────
   // Live motion registry — the clip library reads it through getRegistry.
@@ -254,6 +262,7 @@ export function createRenderer(options: RendererOptions): Renderer {
       // vrm.update so expressionManager.update()/spring bones see this frame's writes.
       stepParticipants(participants, ctx);
       currentVrm.update(dt);
+      applyStringScale();
     }
     renderer.render(scene, camera);
     // Refresh the low-res alpha grab (offscreen render-target readback) for the
@@ -322,6 +331,7 @@ export function createRenderer(options: RendererOptions): Renderer {
     rootYaw.onVrmLoaded(vrm);
     currentVrm = vrm;
     scene.add(vrm.scene);
+    applyStringScale();
 
     // Adopt the VRM: cache bones, claim lookAt, recompute the per-model emotion
     // predicate/resolver — each participant's own onVrmLoaded, in fixed order.
@@ -415,6 +425,10 @@ export function createRenderer(options: RendererOptions): Renderer {
     setOrbit: rig.setOrbit,
     getCharacterAnchor: probes.getCharacterAnchor,
     getCharacterWidthPx: probes.getCharacterWidthPx,
+    setStringFlat(scaleX) {
+      stringScaleX = scaleX !== null && scaleX > 0 && scaleX < 1 ? scaleX : null;
+      applyStringScale();
+    },
     hitTest(x, y) {
       const stage = clientToStage(x, y, mountRect);
       return alphaHitTest.hitTest(stage.x, stage.y);

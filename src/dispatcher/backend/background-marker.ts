@@ -32,6 +32,7 @@ export function backgroundMarker(eventName: string, trigger: TriggerMeta): strin
   if (eventName === "proactive.peek") return "(I left you peeking out from the screen edge)";
   if (eventName === "proactive.dropped") return "(I just dropped you from mid-air)";
   if (eventName === "proactive.pkl_dance") return "(I just dropped a dance file onto you)";
+  if (eventName === "proactive.image_held") return "(I just dropped this image onto you)";
   if (eventName === "proactive.screen_app_switched") {
     return "(I just moved over to something else on my screen)";
   }

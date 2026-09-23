@@ -64,6 +64,8 @@ export function createSurfacesRouter({
     showTool: local.showTool,
     finishTool: local.finishTool,
     hideTool: local.hideTool,
+    showHeldCard: local.showHeldCard,
+    hideHeldCard: local.hideHeldCard,
 
     summonInput: () => input().summonInput(),
     dismissInput: () => input().dismissInput(),

@@ -212,6 +212,18 @@ export interface HitTestKnobs {
   alpha_threshold: number;
 }
 
+/** "让一下" — walk to a screen edge, or flatten into the gap that cannot hold her. */
+export interface StringFormConfig {
+  /** Submitted text that asks her to step aside. Exact match after trim. */
+  phrase: string;
+  /** Standing width, logical px, used when the live model width is unavailable. */
+  body_width_px: number;
+  /** Horizontal scale while flattened. */
+  scale_x: number;
+  /** How often a flattened body rechecks whether the gap can hold her again. */
+  poll_ms: number;
+}
+
 /** Cursor gaze-tracking angles (degrees) and damping. */
 export interface GazeKnobs {
   /** No tracking within this eccentricity (degrees). */
@@ -266,6 +278,8 @@ export interface AvatarConfig {
   gesture_cues: GestureCuesConfig;
   /** Cursor gaze-tracking knob. */
   gaze: GazeKnobs;
+  /** Typed "step aside" body command. */
+  string_form: StringFormConfig;
 }
 
 /** Attach-time caps on one turn's image attachments. */

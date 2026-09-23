@@ -386,6 +386,7 @@ all situational detail still lives in the trigger lines above.
 | `proactive.peek` | `(I left you peeking out from the screen edge)` |
 | `proactive.dropped` | `(I just dropped you from mid-air)` |
 | `proactive.pkl_dance` | `(I just dropped a dance file onto you)` |
+| `proactive.image_held` | `(I just dropped this image onto you)` |
 | `proactive.screen_app_switched` | `(I just moved over to something else on my screen)` |
 | `proactive.screen_long_session` | `(I've been in the same thing on my screen for a while)` |
 | `proactive.*` (other) | `(I've gone quiet for a while)` |

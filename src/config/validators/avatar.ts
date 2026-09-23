@@ -12,6 +12,7 @@ import type {
   JumpConfig,
   PeekConfig,
   PerchWalkConfig,
+  StringFormConfig,
   TapConfig,
   WalkConfig,
 } from "../load";
@@ -588,6 +589,42 @@ export function validateAvatar(file: string, raw: unknown): AvatarConfig {
     ranged("smooth", 0, 1000, false);
   }
 
+  // string_form — typed step-aside.
+  const string_form: Partial<StringFormConfig> = {};
+  const rawStringForm = raw.string_form;
+  if (!isObject(rawStringForm)) {
+    issues.push(`string_form must be an object (got: ${JSON.stringify(rawStringForm)})`);
+  } else {
+    rejectUnknownKeys(
+      issues,
+      rawStringForm,
+      ["phrase", "body_width_px", "scale_x", "poll_ms"],
+      "string_form",
+    );
+    string_form.phrase = str(rawStringForm, "string_form", "phrase");
+    string_form.body_width_px = num(
+      rawStringForm,
+      "string_form",
+      "body_width_px",
+      (v) => v > 0,
+      "a finite number > 0",
+    );
+    string_form.scale_x = num(
+      rawStringForm,
+      "string_form",
+      "scale_x",
+      (v) => v > 0 && v < 1,
+      "a finite number in (0, 1)",
+    );
+    string_form.poll_ms = int(
+      rawStringForm,
+      "string_form",
+      "poll_ms",
+      (v) => v >= 1,
+      "an integer >= 1",
+    );
+  }
+
   assertValid(file, issues);
   return {
     vrm_url,
@@ -604,6 +641,7 @@ export function validateAvatar(file: string, raw: unknown): AvatarConfig {
     drag_hold_ms: drag_hold_ms as number,
     gesture_cues: gesture_cues as GestureCuesConfig,
     gaze: gaze as GazeKnobs,
+    string_form: string_form as StringFormConfig,
     ...(available !== undefined ? { available } : {}),
   };
 }

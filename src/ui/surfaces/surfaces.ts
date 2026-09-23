@@ -48,6 +48,12 @@ export interface Surfaces {
   /** Hide the chip immediately. */
   hideTool(): void;
 
+  // ── held card (a dropped image she is showing) ──
+  /** Show one image beside the body. A later call replaces it. */
+  showHeldCard(dataUrl: string): void;
+  /** Hide the card. */
+  hideHeldCard(): void;
+
   // ── text input ──
   /** Hotkey summon — slide up + focus. */
   summonInput(): void;
@@ -102,6 +108,9 @@ export function createSurfaces({
   const el = document.createElement("div");
   el.className = "yui-ui";
   el.innerHTML = `
+    <button type="button" class="yui-held-card" hidden>
+      <img alt="" />
+    </button>
     <div class="yui-tool" role="status" aria-live="polite" hidden>
       <span class="yui-tool__dot" aria-hidden="true"></span>
       <span class="yui-tool__label"></span>
@@ -153,6 +162,8 @@ export function createSurfaces({
   `;
   mount.appendChild(el);
 
+  const cardEl = el.querySelector<HTMLButtonElement>(".yui-held-card")!;
+  const cardImg = cardEl.querySelector("img")!;
   const toolEl = el.querySelector<HTMLDivElement>(".yui-tool")!;
   const toolLabel = el.querySelector<HTMLSpanElement>(".yui-tool__label")!;
   const bubbleEl = el.querySelector<HTMLDivElement>(".yui-bubble")!;
@@ -187,7 +198,20 @@ export function createSurfaces({
   for (const button of popButtons) button.hidden = !isTauri();
 
   // Surfaces aren't remounted on locale change, so the labels are (re)applied here.
+  function hideHeldCard(): void {
+    cardEl.hidden = true;
+    cardImg.removeAttribute("src");
+  }
+
+  function showHeldCard(dataUrl: string): void {
+    cardImg.src = dataUrl;
+    cardEl.hidden = false;
+  }
+
+  cardEl.addEventListener("click", hideHeldCard);
+
   function applyLocaleLabels(): void {
+    cardEl.setAttribute("aria-label", t("aria.dismiss_card"));
     for (const button of popButtons) {
       button.setAttribute("aria-label", t("aria.pop_message"));
       button.setAttribute("title", t("aria.pop_message"));
@@ -201,6 +225,7 @@ export function createSurfaces({
 
   function dispose(): void {
     unsubscribeLocale();
+    cardEl.removeEventListener("click", hideHeldCard);
     for (const button of popButtons) button.removeEventListener("click", onPopClick);
     bubble.dispose();
     tool.dispose();
@@ -218,6 +243,8 @@ export function createSurfaces({
     showTool: tool.showTool,
     finishTool: tool.finishTool,
     hideTool: tool.hideTool,
+    showHeldCard,
+    hideHeldCard,
     summonInput: input.summonInput,
     dismissInput: input.dismissInput,
     isInputOpen: input.isInputOpen,

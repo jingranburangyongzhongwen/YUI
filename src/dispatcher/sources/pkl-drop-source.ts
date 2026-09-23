@@ -32,9 +32,20 @@ export function isVideoPath(path: string): boolean {
   return /\.(mp4|mov)$/i.test(path.split(/[\\/]/).pop() ?? path);
 }
 
+export function isImagePath(path: string): boolean {
+  return /\.(png|jpe?g|webp|gif)$/i.test(path.split(/[\\/]/).pop() ?? path);
+}
+
 export function firstDancePath(paths: readonly string[]): string | null {
   for (const path of paths) {
     if (isPklPath(path) || isVideoPath(path)) return path;
+  }
+  return null;
+}
+
+export function firstImagePath(paths: readonly string[]): string | null {
+  for (const path of paths) {
+    if (isImagePath(path)) return path;
   }
   return null;
 }
@@ -66,6 +77,7 @@ interface PklDropSurfaces {
   showTool(toolId: string): void;
   finishTool(): void;
   hideTool(): void;
+  showHeldCard?(dataUrl: string): void;
 }
 
 export interface FileDragState {
@@ -78,6 +90,10 @@ export interface PklDropSourceDeps {
   surfaces: PklDropSurfaces;
   getReservedIds: () => string[];
   reloadConfig?: () => Promise<unknown>;
+  /** Read a dropped image into a data URL, or reject when it is not an image or is too large. */
+  readDroppedImage?: (path: string) => Promise<string>;
+  /** Shrink a data URL before it is shown and sent. Defaults to identity. */
+  downscaleImage?: (dataUrl: string) => Promise<string>;
   importPkl?: (
     srcPath: string,
     reservedIds: readonly string[],
@@ -236,6 +252,29 @@ export function createPklDropSource(deps: PklDropSourceDeps): PklDropSource {
     return importVideo(srcPath, reservedIds);
   }
 
+  async function holdImage(srcPath: string): Promise<void> {
+    const read = deps.readDroppedImage;
+    const show = deps.surfaces.showHeldCard;
+    if (!read || !show) return;
+    setHold(false);
+    try {
+      const raw = await read(srcPath);
+      const jpeg = deps.downscaleImage ? await deps.downscaleImage(raw) : raw;
+      show(jpeg);
+      deps.bus.push({
+        source: "os_event_watcher",
+        event_name: "proactive.image_held",
+        ts: now(),
+        hint_tier: 2,
+        dnd_override: true,
+        payload: { images: [jpeg] },
+      });
+      log.info("image_held");
+    } catch (error) {
+      log.warn("image_hold_failed", { error: String(error) });
+    }
+  }
+
   async function convert(srcPath: string): Promise<void> {
     converting = true;
     setHold(false);
@@ -306,17 +345,23 @@ export function createPklDropSource(deps: PklDropSourceDeps): PklDropSource {
         return;
       }
       const src = firstDancePath(event.paths);
-      if (!src || !overCharacter(event.position)) {
-        log.debug("pkl_drop_ignored", { has_dance: !!src });
+      const image = firstImagePath(event.paths);
+      if (!overCharacter(event.position) || (!src && !image)) {
+        log.debug("pkl_drop_ignored", { has_dance: !!src, has_image: !!image });
         setHold(false);
         return;
       }
-      if (isVideoPath(src) && !getWhamUrl().trim()) {
-        log.debug("pkl_drop_ignored", { has_dance: true, wham: false });
-        setHold(false);
+      if (src) {
+        if (isVideoPath(src) && !getWhamUrl().trim()) {
+          log.debug("pkl_drop_ignored", { has_dance: true, wham: false });
+          setHold(false);
+          return;
+        }
+        void convert(src);
         return;
       }
-      void convert(src);
+      if (!image) return;
+      void holdImage(image);
     } catch (error) {
       log.warn("pkl_drop_failed", { error: String(error) });
     }

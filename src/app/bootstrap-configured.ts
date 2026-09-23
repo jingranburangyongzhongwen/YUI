@@ -26,6 +26,7 @@ import type { SettingsStores } from "../settings/settings-stores";
 import { isTauri } from "../tauri-env";
 import type { VoiceInputStatus } from "../ui/chips/voice-input-status";
 import { t } from "../ui/i18n";
+import { downscaleToJpeg } from "../ui/input/image-resize";
 import { maybeShowFirstRunHint } from "../ui/notices/first-run-hint";
 import { wireIngressDeadNotice } from "../ui/notices/ingress-dead-notice";
 import type { createQuickControls } from "../ui/quick-controls/quick-controls";
@@ -298,6 +299,18 @@ const realFactories: ConfiguredBootstrapFactories = {
         getReservedIds: () => Object.keys(config.get().motions),
         reloadConfig: () => config.reload(),
         getWhamUrl: () => getEndpoints().wham_base_url ?? "",
+        readDroppedImage: async (path) => {
+          const { invoke } = await import("@tauri-apps/api/core");
+          return invoke<string>("read_dropped_image", {
+            path,
+            maxBytes: config.get().guardrails.attachments.max_image_bytes,
+          });
+        },
+        downscaleImage: async (dataUrl) => {
+          const blob = await (await fetch(dataUrl)).blob();
+          const file = new File([blob], "drop", { type: blob.type || "image/png" });
+          return downscaleToJpeg(file);
+        },
         holdPointerCapture: (hold) => {
           if (hold) hitTest.suspend("capture", PKL_DROP_HIT_OWNER);
           else hitTest.resume(PKL_DROP_HIT_OWNER);
@@ -401,6 +414,7 @@ const realFactories: ConfiguredBootstrapFactories = {
     };
     wireStopButton({ onStop: (cb) => surfaces.onStop(cb), stopTurn, socket: pushSocket, log });
     surfaces.onSubmit((text, images) => {
+      locomotion.yieldOnText(text);
       userInput.submit(text, images);
       proactiveSource.noteInteraction();
     });

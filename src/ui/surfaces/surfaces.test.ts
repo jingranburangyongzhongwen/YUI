@@ -85,3 +85,31 @@ describe("bubble ↔ input coordination — input must not obscure the bubble", 
     expect(parseFloat(second)).toBeGreaterThan(parseFloat(first));
   });
 });
+
+describe("held card", () => {
+  let mount: HTMLElement;
+  let s: ReturnType<typeof createSurfaces>;
+
+  beforeEach(() => {
+    ({ s, mount } = makeSurfaces());
+  });
+
+  afterEach(() => {
+    s.dispose();
+    mount.remove();
+  });
+
+  it("shows one image and a click clears it", () => {
+    const card = () => mount.querySelector<HTMLButtonElement>(".yui-held-card")!;
+    const img = () => card().querySelector("img")!;
+    expect(card().hidden).toBe(true);
+    s.showHeldCard("data:image/jpeg;base64,aaa");
+    expect(card().hidden).toBe(false);
+    expect(img().getAttribute("src")).toBe("data:image/jpeg;base64,aaa");
+    s.showHeldCard("data:image/jpeg;base64,bbb");
+    expect(img().getAttribute("src")).toBe("data:image/jpeg;base64,bbb");
+    card().click();
+    expect(card().hidden).toBe(true);
+    expect(img().hasAttribute("src")).toBe(false);
+  });
+});

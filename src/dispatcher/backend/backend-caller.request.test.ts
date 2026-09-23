@@ -292,6 +292,7 @@ describe("backend_caller — cue context forwarding (trigger.cue)", () => {
     ["proactive.head_pat", "(I just patted your head)"],
     ["proactive.dropped", "(I just dropped you from mid-air)"],
     ["proactive.pkl_dance", "(I just dropped a dance file onto you)"],
+    ["proactive.image_held", "(I just dropped this image onto you)"],
   ] as const)("%s user message is its reflex-gesture marker", async (eventName, marker) => {
     script.events = [completedEvent({ speech_text: "" })];
     const env: BusEnvelope = {

@@ -96,6 +96,12 @@
     "headNeckSplit": 0.6,
     "smooth": 10
   },
+  "string_form": {
+    "phrase": "让一下",
+    "body_width_px": 180,
+    "scale_x": 0.12,
+    "poll_ms": 700
+  },
   "available": [
     {
       "id": "sendagaya_shino",

@@ -1,5 +1,13 @@
 /** Composes the travel frame, the five locomotion loops and the window sources into one handle. */
+import {
+  CLIMB_DOWN_LANDING_MOTION_ID,
+  CLIMB_DOWN_MOTION_ID,
+  CLIMB_UP_DONE_MOTION_ID,
+  CLIMB_UP_MOTION_ID,
+} from "../../ambient/locomotion/climber";
+import { FALL_MOTION_ID, LAND_MOTION_ID } from "../../ambient/locomotion/faller";
 import { createSitter, type Sitter } from "../../ambient/locomotion/sitter";
+import { onFloor } from "../../ambient/locomotion/walker";
 import {
   wireClimber,
   wireFaller,
@@ -15,8 +23,19 @@ import type { WindowRect } from "../../contract";
 import type { EventBus } from "../../dispatcher/core/event-bus";
 import type { Dispatcher } from "../../dispatcher/dispatcher";
 import type { createVrmSelection } from "../../io/assets/vrm-selection";
-import type { DescentEdge } from "../../io/window/geometry/screen-geometry";
+import {
+  type DescentEdge,
+  floorPx,
+  logicalWorkArea,
+  monitorAt,
+  toScreenMonitor,
+} from "../../io/window/geometry/screen-geometry";
 import type { HitTestController } from "../../io/window/pet/hit-test";
+import {
+  blockingWindow,
+  createStringForm,
+  type YieldMeasure,
+} from "../../io/window/pet/string-form";
 import type { Logger } from "../../logger";
 import type { Renderer } from "../../renderer";
 import type { createAgentNotifySettings } from "../../settings/backend/agent-notify-settings";
@@ -66,6 +85,8 @@ export function wireLocomotion(deps: {
   sitter: Sitter;
   dropSource: { noteUserDrag(): void; noteUserDragEnd(): void };
   setDragging(dragging: boolean): void;
+  /** Typed step-aside. No-op unless the phrase matches and she is free on the floor. */
+  yieldOnText(text: string): void;
   /** Cancels the five loops in the order a drag start and an agent move cancel them. */
   cancel(): void;
   abortTravel(): Promise<void>;
@@ -99,6 +120,16 @@ export function wireLocomotion(deps: {
   // Ambient walking outranks nothing: a drag, an agent command or a reflex turn cancels a
   // stroll at once; an ordinary turn walks on.
   let dragging = false;
+  let stringFlat = false;
+  const yieldBlocked = new Set([
+    FALL_MOTION_ID,
+    LAND_MOTION_ID,
+    CLIMB_UP_MOTION_ID,
+    CLIMB_UP_DONE_MOTION_ID,
+    CLIMB_DOWN_MOTION_ID,
+    CLIMB_DOWN_LANDING_MOTION_ID,
+  ]);
+  const bodyYields = (): boolean => peekActive() || stringFlat;
   let climberRef: { cancel(): void; descend(edge: DescentEdge): Promise<void> } | null = null;
   const walker = wireWalker({
     bus,
@@ -107,7 +138,7 @@ export function wireLocomotion(deps: {
     getWalkConfig: () => getConfig().avatar.walk,
     getDescendConfig: () => getConfig().avatar.descend,
     getMotionKind: (id) => getConfig().motions[id]?.kind,
-    isPeeking: () => peekActive(),
+    isPeeking: bodyYields,
     isDragging: () => dragging,
     setHitTestMoving: (moving) => hitTest.setMoving(moving),
     onStrollEnd,
@@ -120,7 +151,7 @@ export function wireLocomotion(deps: {
   const rootMover = wireRootMover({
     renderer,
     isDragging: () => dragging,
-    isPeeking: () => peekActive(),
+    isPeeking: bodyYields,
     isHeld: () => walker.isWalkingTo() || travelFrame.travel.current() != null,
     setHitTestMoving: (moving) => hitTest.setMoving(moving),
     log,
@@ -236,7 +267,7 @@ export function wireLocomotion(deps: {
     getFallConfig: () => getConfig().avatar.fall,
     getWalkConfig: () => getConfig().avatar.walk,
     getMotionKind: (id) => getConfig().motions[id]?.kind,
-    isPeeking: () => peekActive(),
+    isPeeking: bodyYields,
     isDragging: () => dragging,
     isBusy: () => dispatcher.isPipelineBusy() || leaveSeatBusy,
     walker,
@@ -251,13 +282,74 @@ export function wireLocomotion(deps: {
   register(climbSettings.subscribe((state) => climber.setEnabled(state.enabled)));
   register(climber.dispose);
 
+  async function measureYield(): Promise<YieldMeasure | null> {
+    const anchor = renderer.getCharacterAnchor();
+    if (!anchor) return null;
+    const win = travelFrame.getWindow();
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { availableMonitors } = await import("@tauri-apps/api/window");
+    const [pos, sf, monitors, windows] = await Promise.all([
+      win.outerPosition(),
+      win.scaleFactor(),
+      availableMonitors().then((list) => list.map(toScreenMonitor)),
+      invoke<WindowRect[]>("list_windows"),
+    ]);
+    const scale = sf > 0 ? sf : 1;
+    const originX = pos.x / scale;
+    const originY = pos.y / scale;
+    const monitor = monitorAt(monitors, pos.x, pos.y);
+    if (!monitor) return null;
+    const tolerance = getConfig().avatar.walk.floor_tolerance_px;
+    if (!onFloor(originY + anchor.y, floorPx(monitor), tolerance)) return null;
+    const work = logicalWorkArea(monitor);
+    const blocking = blockingWindow(windows, work);
+    const liveWidth = renderer.getCharacterWidthPx();
+    return {
+      bodyX: originX + anchor.x,
+      anchorX: anchor.x,
+      ...(liveWidth !== null && liveWidth > 0 ? { bodyWidth: liveWidth } : {}),
+      monitor: { x: work.x, width: work.width },
+      window: blocking ? { x: blocking.x, width: blocking.width } : null,
+    };
+  }
+
+  const stringForm = createStringForm({
+    getConfig: () => getConfig().avatar.string_form,
+    canYield: () => {
+      if (dragging || peekActive() || renderer.isPerched() || renderer.isPeeking()) return false;
+      if (dispatcher.getPosture().state !== "standing") return false;
+      if (walker.isStrolling() || walker.isWalkingTo()) return false;
+      const id = renderer.getCurrentMotion()?.id;
+      return id === undefined || !yieldBlocked.has(id);
+    },
+    measure: measureYield,
+    walkTo: (toX) => walker.walkTo(toX),
+    moveTo: async (toX) => {
+      const win = travelFrame.getWindow();
+      const [pos, sf] = await Promise.all([win.outerPosition(), win.scaleFactor()]);
+      const scale = sf > 0 ? sf : 1;
+      await win.setPositionLogical(Math.round(toX), Math.round(pos.y / scale));
+    },
+    setFlat(scaleX) {
+      stringFlat = scaleX !== null;
+      renderer.setStringFlat(scaleX);
+    },
+    schedule(ms, fn) {
+      const id = setInterval(fn, ms);
+      return () => clearInterval(id);
+    },
+  });
+  register(stringForm.stop);
+
   return {
     walker,
     sitter,
     dropSource: windowSources,
     setDragging(next) {
       dragging = next;
+      if (next) stringForm.noteDrag();
     },
+    yieldOnText: (text) => stringForm.onText(text),
     cancel: () => {
       walker.cancel();
       rootMover.cancel();

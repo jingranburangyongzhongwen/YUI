@@ -91,6 +91,12 @@ export function avatarFixture(): AvatarConfig {
       land_frac: 0.67,
       flight_timeout_ms: 4000,
     },
+    string_form: {
+      phrase: "让一下",
+      body_width_px: 180,
+      scale_x: 0.12,
+      poll_ms: 700,
+    },
     drag_hold_ms: 5000,
     gesture_cues: {
       drag_held: { label: "dragged around" },

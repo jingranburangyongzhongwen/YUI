@@ -5,6 +5,8 @@ import type { BusEnvelope } from "../core/event-bus";
 import {
   createPklDropSource,
   firstDancePath,
+  firstImagePath,
+  isImagePath,
   isPklPath,
   isVideoPath,
   mapTauriDragDrop,
@@ -44,6 +46,7 @@ function harness(opts?: {
     showTool: vi.fn(),
     finishTool: vi.fn(),
     hideTool: vi.fn(),
+    showHeldCard: vi.fn(),
   };
   const importPkl = vi.fn(async () => {
     if (opts?.importError) throw new Error("conversion failed");
@@ -105,6 +108,14 @@ describe("pkl path helpers", () => {
     expect(firstDancePath(["/a.mp4", "/b.pkl"])).toBe("/a.mp4");
     expect(firstDancePath(["/a.pkl", "/b.mp4"])).toBe("/a.pkl");
     expect(firstDancePath(["/a.txt"])).toBeNull();
+    expect(isImagePath("C:\\\\shots\\\\Card.PNG")).toBe(true);
+    expect(isImagePath("/tmp/clip.jpg")).toBe(true);
+    expect(isImagePath("/tmp/clip.jpeg")).toBe(true);
+    expect(isImagePath("/tmp/clip.webp")).toBe(true);
+    expect(isImagePath("/tmp/clip.gif")).toBe(true);
+    expect(isImagePath("/tmp/clip.mp4")).toBe(false);
+    expect(firstImagePath(["/a.txt", "/b.png"])).toBe("/b.png");
+    expect(firstImagePath(["/a.mp4"])).toBeNull();
   });
 });
 
@@ -115,6 +126,47 @@ describe("createPklDropSource", () => {
     source.handleEvent({ type: "over", position: { x: 90, y: 120 } });
     expect(renderer.playMotion).not.toHaveBeenCalled();
     expect(renderer.hitTest).not.toHaveBeenCalled();
+  });
+
+  it("shows a card and fires one image turn without learning a dance", async () => {
+    const readDroppedImage = vi.fn(async () => "data:image/png;base64,raw");
+    const downscaleImage = vi.fn(async (url: string) => `${url}-jpeg`);
+    const { pushed, importPkl, importVideo, surfaces } = harness();
+    const wired = createPklDropSource({
+      bus: {
+        push: (env) => {
+          pushed.push(env);
+          return true;
+        },
+      },
+      renderer: {
+        hitTest: () => true,
+        playMotion: vi.fn(),
+        upsertMotion: vi.fn(),
+        isPerched: () => false,
+        isPeeking: () => false,
+      },
+      surfaces,
+      getReservedIds: () => [],
+      importPkl,
+      importVideo,
+      readDroppedImage,
+      downscaleImage,
+      now: () => 1_700,
+    });
+    wired.handleEvent(drop(["/tmp/card.png"]));
+    const jpeg = "data:image/png;base64,raw-jpeg";
+    await vi.waitFor(() => expect(surfaces.showHeldCard).toHaveBeenCalledWith(jpeg));
+    expect(importPkl).not.toHaveBeenCalled();
+    expect(importVideo).not.toHaveBeenCalled();
+    expect(pushed).toEqual([
+      expect.objectContaining({
+        event_name: "proactive.image_held",
+        hint_tier: 2,
+        dnd_override: true,
+        payload: { images: [jpeg] },
+      }),
+    ]);
   });
 
   it("does not pose when Explorer withholds paths on enter", () => {

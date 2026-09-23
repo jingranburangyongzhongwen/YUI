@@ -32,6 +32,8 @@ function makeLocal(): Surfaces {
     showTool: vi.fn(),
     finishTool: vi.fn(),
     hideTool: vi.fn(),
+    showHeldCard: vi.fn(),
+    hideHeldCard: vi.fn(),
     summonInput: vi.fn(),
     dismissInput: vi.fn(),
     isInputOpen: vi.fn(() => false),
@@ -194,12 +196,16 @@ describe("createSurfacesRouter", () => {
     router.showTool("web_search");
     router.finishTool();
     router.hideTool();
+    router.showHeldCard("data:image/jpeg;base64,a");
+    router.hideHeldCard();
     router.setInputAnchor(120);
     router.dispose();
 
     expect(local.showTool).toHaveBeenCalledWith("web_search");
     expect(local.finishTool).toHaveBeenCalledTimes(1);
     expect(local.hideTool).toHaveBeenCalledTimes(1);
+    expect(local.showHeldCard).toHaveBeenCalledWith("data:image/jpeg;base64,a");
+    expect(local.hideHeldCard).toHaveBeenCalledTimes(1);
     expect(local.setInputAnchor).toHaveBeenCalledWith(120);
     expect(local.dispose).toHaveBeenCalledTimes(1);
     expect(router.el).toBe(local.el);

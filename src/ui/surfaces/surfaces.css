@@ -19,6 +19,7 @@
 @media (prefers-reduced-motion: reduce) {
   .yui-bubble,
   .yui-tool,
+  .yui-held-card,
   .yui-input {
     transition-duration: var(--yui-dur-fast) !important;
     transition-property: opacity !important;
@@ -861,4 +862,30 @@
   .yui-input__error-dismiss {
     transition: none;
   }
+}
+
+/* Held card — one dropped image beside the torso. Click dismisses. */
+.yui-held-card {
+  position: absolute;
+  left: 62%;
+  top: 42%;
+  width: 88px;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: var(--yui-scrim-strong);
+  box-shadow: var(--yui-float);
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.yui-held-card[hidden] {
+  display: none;
+}
+.yui-held-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }

@@ -29,6 +29,9 @@ mod pkl_import;
 // Video → remote WHAM pkl → custom_motions VRMA install.
 mod video_import;
 
+// Dropped image → data URL for the held card.
+mod image_drop;
+
 // File-drag arming so a click-through pet can receive onDragDropEvent.
 mod file_drag;
 
@@ -265,6 +268,7 @@ pub fn run() {
             vrm_import::remove_user_vrm,
             pkl_import::import_pkl_motion,
             video_import::import_video_motion,
+            image_drop::read_dropped_image,
             voice_import::import_voice_file,
             voice_import::remove_user_voice,
             passthrough::set_click_through,

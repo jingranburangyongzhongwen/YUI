@@ -81,6 +81,15 @@ describe("configs/avatar.json", () => {
     expect(a.tap.pat_hold_ms).toBe(300);
   });
 
+  it("carries the step-aside phrase and flatten scale", () => {
+    expect(a.string_form).toEqual({
+      phrase: "让一下",
+      body_width_px: 180,
+      scale_x: 0.12,
+      poll_ms: 700,
+    });
+  });
+
   it("carries side-peek geometry and mirroring defaults", () => {
     expect(a.peek).toEqual({
       side_out_frac: 0.28,
