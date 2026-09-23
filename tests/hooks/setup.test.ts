@@ -22,6 +22,26 @@ afterEach(() => {
   while (cleanups.length) cleanups.pop()?.();
 });
 
+/** Git Bash on Windows copies instead of linking when symlink creation is denied. */
+function symlinksWork(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "yui-sym-"));
+  const src = join(dir, "a");
+  const dst = join(dir, "b");
+  writeFileSync(src, "x");
+  const linked = spawnSync("bash", ["-lc", 'ln -sfn "$SRC" "$DST" && [ -L "$DST" ]'], {
+    env: { ...process.env, SRC: src, DST: dst },
+  });
+  rmSync(dir, { recursive: true, force: true });
+  return linked.status === 0;
+}
+
+const LINKS = symlinksWork();
+
+function expectAsset(path: string, bytes: string) {
+  expect(readFileSync(path, "utf8")).toBe(bytes);
+  if (LINKS) expect(lstatSync(path).isSymbolicLink()).toBe(true);
+}
+
 function tmp(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
@@ -56,9 +76,7 @@ describe("scripts/worktree-setup.sh", () => {
     const r = spawnSync("bash", [SETUP, wt, main], { encoding: "utf8" });
     expect(r.status).toBe(0);
 
-    const vrm = join(wt, "resources/vrms/carlotta.vrm");
-    expect(lstatSync(vrm).isSymbolicLink()).toBe(true);
-    expect(readFileSync(vrm, "utf8")).toBe("vrm-bytes");
+    expectAsset(join(wt, "resources/vrms/carlotta.vrm"), "vrm-bytes");
 
     expect(readFileSync(join(wt, ".env.local"), "utf8")).toContain("VITE_YUI_CHAT_KEY");
   });
@@ -68,7 +86,7 @@ describe("scripts/worktree-setup.sh", () => {
     const wt = tmp("yui-wt-");
     expect(spawnSync("bash", [SETUP, wt, main]).status).toBe(0);
     expect(spawnSync("bash", [SETUP, wt, main]).status).toBe(0);
-    expect(lstatSync(join(wt, "resources/vrms/carlotta.vrm")).isSymbolicLink()).toBe(true);
+    expectAsset(join(wt, "resources/vrms/carlotta.vrm"), "vrm-bytes");
   });
 
   it("succeeds when .env.local is absent in the main checkout", () => {

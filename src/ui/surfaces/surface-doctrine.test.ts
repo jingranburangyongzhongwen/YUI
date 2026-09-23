@@ -13,7 +13,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const read = (name: string): string => readFileSync(resolve(__dirname, name), "utf-8");
+const read = (name: string): string =>
+  readFileSync(resolve(__dirname, name), "utf-8").replace(/\r\n/g, "\n");
 
 /** Slices a top-level CSS rule's body out by selector text (anchored to line start, no nesting). */
 function extractBlock(css: string, selector: string): string {

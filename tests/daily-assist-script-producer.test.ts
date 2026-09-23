@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -40,9 +40,34 @@ function writeQueue(rows: Row[]): string {
 }
 
 // spawnSync would block the event loop that serves the ingress above.
+function pythonLaunch(): { command: string; prefix: string[] } {
+  const candidates = [
+    { command: "python3", prefix: [] as string[] },
+    { command: "python", prefix: [] as string[] },
+    { command: "py", prefix: ["-3"] },
+  ];
+  for (const candidate of candidates) {
+    const probed = spawnSync(
+      candidate.command,
+      [
+        ...candidate.prefix,
+        "-c",
+        "import sys; raise SystemExit(0 if sys.version_info[0] >= 3 else 1)",
+      ],
+      {
+        windowsHide: true,
+      },
+    );
+    if (probed.status === 0) return candidate;
+  }
+  return candidates[0];
+}
+
+const PYTHON = pythonLaunch();
+
 function runScript(args: string[]) {
   return new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
-    const child = spawn("python3", [SCRIPT, ...args], {
+    const child = spawn(PYTHON.command, [...PYTHON.prefix, SCRIPT, ...args], {
       env: { ...process.env, NO_PROXY: "*", no_proxy: "*" },
     });
     let stdout = "";

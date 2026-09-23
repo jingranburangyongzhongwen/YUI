@@ -5,10 +5,12 @@
 # the worktree path — stdout must carry the path and nothing else.
 set -u
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/json.sh"
+
 input=$(cat 2>/dev/null) || input=""
 
 PROJECT="${CLAUDE_PROJECT_DIR:-}"
-[ -z "$PROJECT" ] && PROJECT=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
+[ -z "$PROJECT" ] && PROJECT=$(json_get '.cwd // empty' || true)
 [ -z "$PROJECT" ] && PROJECT="$PWD"
 
 if ! git -C "$PROJECT" rev-parse --git-dir >/dev/null 2>&1; then
@@ -16,7 +18,7 @@ if ! git -C "$PROJECT" rev-parse --git-dir >/dev/null 2>&1; then
   exit 1
 fi
 
-branch=$(printf '%s' "$input" | jq -r '.branch // .branch_name // .name // empty' 2>/dev/null)
+branch=$(json_get '.branch // .branch_name // .name // empty' || true)
 [ -z "$branch" ] && branch="wt-$(date +%s)"
 
 base="$(basename "$PROJECT")-$(printf '%s' "$branch" | tr '/' '-')"

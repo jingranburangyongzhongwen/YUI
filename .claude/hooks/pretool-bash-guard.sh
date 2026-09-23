@@ -4,16 +4,18 @@
 # commit/push to main; it must request the user. Fails OPEN on any error.
 set -u
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/json.sh"
+
 deny() {
-  jq -cn --arg r "$1" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  json_deny "$1"
   exit 0
 }
 
 input=$(cat 2>/dev/null) || exit 0
-cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
+pair=$(json_pair '.tool_input.command // empty' '.cwd // empty') || exit 0
+cmd=${pair%%$'\036'*}
+cwd=${pair#*$'\036'}
 [ -z "$cmd" ] && exit 0
-cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 
 if printf '%s' "$cmd" | grep -qE '(^|[;&|[:space:]])(cat|less|more|head|tail|bat|grep|rg|sed|awk|strings|base64|xxd|source)[^;&|]*\.env\.local'; then
   deny ".env.local holds VITE_YUI_CHAT_KEY — reading it into the transcript is blocked. Check existence with ls; scripts/worktree-setup.sh copies it without exposing contents."

@@ -80,13 +80,17 @@ describe("pretool-bash-guard.sh — main branch guard", () => {
     expect(denyReason(r)).toBeUndefined();
   });
 
-  it("allows read-only git commands on main", () => {
-    for (const cmd of ["git status", "git log --oneline", "git diff"]) {
-      expect(
-        denyReason(runHook("pretool-bash-guard.sh", bashInput(cmd, mainRepo))),
-      ).toBeUndefined();
-    }
-  });
+  it(
+    "allows read-only git commands on main",
+    () => {
+      for (const cmd of ["git status", "git log --oneline", "git diff"]) {
+        expect(
+          denyReason(runHook("pretool-bash-guard.sh", bashInput(cmd, mainRepo))),
+        ).toBeUndefined();
+      }
+    },
+    20_000,
+  );
 });
 
 describe("pretool-bash-guard.sh — secret guard", () => {

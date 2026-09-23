@@ -17,7 +17,7 @@ function readJson(relativePath: string) {
 }
 
 function frontmatter(relativePath: string): Record<string, string> {
-  const text = readFileSync(join(ROOT, relativePath), "utf8");
+  const text = readFileSync(join(ROOT, relativePath), "utf8").replace(/\r\n/g, "\n");
   expect(text.startsWith("---\n")).toBe(true);
   const lines = text.split("\n");
   const close = lines.indexOf("---", 1);
