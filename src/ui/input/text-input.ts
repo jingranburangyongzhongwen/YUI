@@ -67,6 +67,7 @@ export function createTextInput(
   { formEl, field, errorEl, trayEl, attachBtn, picker, sendBtn }: TextInputElements,
   bubble: TextInputBubbleAnchor,
   onOpenChange?: (open: boolean) => void,
+  opts?: { keepOpenOnSubmit?: boolean },
 ): TextInput {
   const submitHandlers: Array<(text: string, images: string[]) => void> = [];
   const stopHandlers: Array<() => void> = [];
@@ -296,6 +297,9 @@ export function createTextInput(
     const images = attachments.slice();
     for (const cb of submitHandlers) cb(text, images);
     clearAttachments();
+    field.value = "";
+    fitField();
+    if (!opts?.keepOpenOnSubmit) dismissInput();
   }
 
   function handleSubmit(e: Event): void {

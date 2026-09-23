@@ -96,6 +96,8 @@ interface SurfacesOptions {
   onPop?: () => void;
   /** Called whenever the input's open state settles. */
   onInputOpenChange?: (open: boolean) => void;
+  /** The message window keeps its composer after a send. The pet input closes. */
+  keepInputOnSubmit?: boolean;
 }
 
 export function createSurfaces({
@@ -104,6 +106,7 @@ export function createSurfaces({
   keepBubbleUntilDismissed,
   onPop,
   onInputOpenChange,
+  keepInputOnSubmit,
 }: SurfacesOptions): Surfaces {
   const el = document.createElement("div");
   el.className = "yui-ui";
@@ -190,6 +193,7 @@ export function createSurfaces({
     { formEl, field, errorEl, trayEl, attachBtn, picker, sendBtn },
     { liftAboveInput: bubble.liftAboveInput, resetPosition: bubble.resetPosition },
     onInputOpenChange,
+    keepInputOnSubmit ? { keepOpenOnSubmit: true } : undefined,
   );
 
   // Both exits lead to the same window; without a second OS window there is nowhere

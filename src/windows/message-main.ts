@@ -60,6 +60,7 @@ async function bootstrap(): Promise<void> {
     mount: app,
     keepBubbleUntilDismissed: () => bubblePersistSettings.get().enabled,
     onInputOpenChange: (open) => bridge.emitControl({ op: "input-open", open }),
+    keepInputOnSubmit: true,
   });
   surfaces.el.classList.add("yui-ui--message");
   surfaces.onSubmit((text, images) => bridge.emitControl({ op: "submit", text, images }));

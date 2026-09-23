@@ -919,6 +919,39 @@ describe("multiline field — Enter, IME safety, auto-grow", () => {
     expect(onSubmit).toHaveBeenCalledWith("안녕", []);
   });
 
+  it("closes the pet input after a send", async () => {
+    const onSubmit = vi.fn();
+    s.onSubmit(onSubmit);
+    s.summonInput();
+    await new Promise((r) => requestAnimationFrame(r));
+    field().value = "안녕";
+
+    pressEnter();
+
+    expect(onSubmit).toHaveBeenCalledWith("안녕", []);
+    expect(form().classList.contains("is-open")).toBe(false);
+    expect(field().value).toBe("");
+  });
+
+  it("keeps the message-window composer open and empty after a send", async () => {
+    s.dispose();
+    mount.remove();
+    mount = document.createElement("div");
+    document.body.appendChild(mount);
+    s = createSurfaces({ mount, keepInputOnSubmit: true });
+    const onSubmit = vi.fn();
+    s.onSubmit(onSubmit);
+    s.summonInput();
+    await new Promise((r) => requestAnimationFrame(r));
+    field().value = "안녕";
+
+    pressEnter();
+
+    expect(onSubmit).toHaveBeenCalledWith("안녕", []);
+    expect(form().classList.contains("is-open")).toBe(true);
+    expect(field().value).toBe("");
+  });
+
   it("keeps Shift+Enter as a line break — no submit, default not prevented", () => {
     const onSubmit = vi.fn();
     s.onSubmit(onSubmit);
