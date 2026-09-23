@@ -147,6 +147,18 @@ describe("endpoints-section.css — components with a display rule honour [hidde
 
 // Same rule on the overlay surfaces: .yui-tool carries `display: inline-flex`, so without
 // its own [hidden] rule a hidden chip keeps painting whenever `is-visible` is on it.
+describe("surfaces.css — tool chip clears the capture tell", () => {
+  it("drops under a visible capture chip, and under the voice chip too", () => {
+    const css = read("surfaces.css");
+    expect(css).toMatch(
+      /\.yui-root:has\(> \.yui-capture\.is-visible\) \.yui-tool\s*\{[^}]*top:\s*calc\(4\.5% \+ 2\.45rem\)/,
+    );
+    expect(css).toMatch(
+      /\.yui-root:has\(> \.yui-capture\.is-visible\):has\(> \.yui-voice\.is-visible\) \.yui-tool\s*\{[^}]*top:\s*calc\(4\.5% \+ 4\.9rem\)/,
+    );
+  });
+});
+
 describe("surfaces.css — components with a display rule honour [hidden]", () => {
   it(".yui-tool sets display:none under [hidden]", () => {
     const css = read("surfaces.css");

@@ -436,6 +436,14 @@
   display: none;
 }
 
+/* Capture tell owns the top slot. The tool chip sits one row under it, and under the voice chip too. */
+.yui-root:has(> .yui-capture.is-visible) .yui-tool {
+  top: calc(4.5% + 2.45rem);
+}
+.yui-root:has(> .yui-capture.is-visible):has(> .yui-voice.is-visible) .yui-tool {
+  top: calc(4.5% + 4.9rem);
+}
+
 .yui-tool.is-visible {
   opacity: 1;
   transform: translate(-50%, 0);
